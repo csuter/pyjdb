@@ -1,0 +1,224 @@
+
+option java_generic_services = true;
+option java_outer_classname = "JDWP_proto";
+option java_package = "com.alltheburritos.debug.jdwp";
+
+option py_generic_services = true;
+// Size: Target VM-specific, up to 8 bytes
+//
+// Description: Uniquely identifies an object in the target VM. A particular
+// object will be identified by exactly one objectID in JDWP commands and
+// replies throughout its lifetime (or until the objectID is explicitly
+// disposed). An ObjectID is not reused to identify a different object unless it
+// has been explicitly disposed, regardless of whether the referenced object has
+// been garbage collected. An objectID of 0 represents a null object.
+//
+// Note that the existence of an object ID does not prevent the garbage collection of
+// the object. Any attempt to access a a garbage collected object with its
+// object ID will result in the INVALID_OBJECT error code. Garbage collection
+// can be disabled with the DisableCollection command, but it is not usually
+// necessary to do so.
+message ObjectID {
+ required int64 value = 1;
+}
+
+// Size: size of objectID plus one byte
+//
+// Description: The first byte is a signature byte which is used to identify the
+// object's type. See JDWP.Tag for the possible values of this byte (note that
+// only object tags, not primitive tags, may be used). It is followed
+// immediately by the objectID itself.
+message TaggedObjectID {
+ required Tag tag = 1;
+ required ObjectID objectID = 2;
+}
+
+// Size: same as objectID
+//
+// Description: Uniquely identifies an object in the target VM that is known to
+// be a thread
+message ThreadID {
+ required int64 value = 1;
+}
+
+// Size: same as objectID
+//
+// Description: Uniquely identifies an object in the target VM that is known to
+// be a thread group
+message ThreadGroupID {
+ required int64 value = 1;
+}
+
+// Size: same as objectID
+//
+// Description: Uniquely identifies an object in the target VM that is known to
+// be a string object. Note: this is very different from string, which is a
+// value.
+message StringID {
+ required int64 value = 1;
+}
+
+// Size: same as objectID
+//
+// Description: Uniquely identifies an object in the target VM that is known to
+// be a class loader object
+message ClassLoaderID {
+ required int64 value = 1;
+}
+
+// Size: same as objectID
+//
+// Description: Uniquely identifies an object in the target VM that is known to
+// be a class object.
+message ClassObjectID {
+ required int64 value = 1;
+}
+
+// Size: same as objectID
+//
+// Description: Uniquely identifies an object in the target VM that is known to
+// be an array.
+message ArrayID {
+ required int64 value = 1;
+}
+
+// Size: same as objectID
+//
+// Description: Uniquely identifies a reference type in the target VM. It should
+// not be assumed that for a particular class, the classObjectID
+// and the referenceTypeID are the same. A particular reference
+// type will be identified by exactly one ID in JDWP commands and replies
+// throughout its lifetime A referenceTypeID is not reused to identify a
+// different reference type, regardless of whether the referenced class has been
+// unloaded.
+message ReferenceTypeID {
+ required int64 value = 1;
+}
+
+// Size: same as referenceTypeID
+//
+// Description: Uniquely identifies a reference type in the target VM that is
+// known to be a class type.
+message ClassID {
+ required int64 value = 1;
+}
+
+// Size: same as referenceTypeID
+//
+// Description: Uniquely identifies a reference type in the target VM that is
+// known to be an interface type.
+message InterfaceID {
+ required int64 value = 1;
+}
+
+// Size: same as referenceTypeID
+//
+// Description: Uniquely identifies a reference type in the target VM that is
+// known to be an array type.
+message ArrayTypeID {
+ required int64 value = 1;
+}
+
+// Size: Target VM-specific, up to 8 bytes (see below)
+//
+// Description: Uniquely identifies a method in some class in the target VM.
+// The methodID must uniquely identify the method within its class/interface or
+// any of its subclasses/subinterfaces/implementors. A methodID is not
+// necessarily unique on its own; it is always paired with a referenceTypeID to
+// uniquely identify one method. The referenceTypeID can identify either the
+// declaring type of the method or a subtype.
+message MethodID {
+ required int64 value = 1;
+}
+
+// Size: Target VM-specific, up to 8 bytes (see below)
+//
+// Description: Uniquely identifies a field in some class in the target VM. The
+// fieldID must uniquely identify the field within its class/interface or any of
+// its subclasses/subinterfaces/implementors. A fieldID is not necessarily
+// unique on its own; it is always paired with a referenceTypeID to uniquely
+// identify one field. The referenceTypeID can identify either the declaring
+// type of the field or a subtype.
+message FieldID {
+ required int64 value = 1;
+}
+
+// Size: Target VM-specific, up to 8 bytes (see below)
+//
+// Description: Uniquely identifies a frame in the target VM. The frameID must
+// uniquely identify the frame within the entire VM (not only within a given
+// thread). The frameID need only be valid during the time its thread is
+// suspended.
+message FrameID {
+ required int64 value = 1;
+}
+
+// Size: Target VM specific
+//
+// Description: An executable location. The location is identified by one byte
+// type tag followed by a classID followed by a
+// methodID followed by an unsigned eight-byte index, which
+// identifies the location within the method. Index values are restricted as
+// follows:
+//  o  The index of the start location for the method is less than all other
+//     locations in the method.
+//  o  The index of the end location for the method is greater than all other
+//     locations in the method.
+//  o  If a line number table exists for a method, locations that belong to a
+//     particular line must fall between the line's location index and the
+//     location index of the next line in the table.
+// Index values within a method are monotonically increasing from the first
+// executable point in the method to the last. For many implementations, each
+// byte-code instruction in the method has its own index, but this is not
+// required.
+//
+// The type tag is necessary to identify whether location's classID identifies a
+// class or an interface. Almost all locations are within classes, but it is
+// possible to have executable code in the static initializer of an interface.
+//
+message Location {
+  required TypeTag typeTag = 1;
+  required ClassID classID = 2;
+  required MethodID methodID = 3;
+  required uint64 index = 4;
+}
+
+// Size: Variable
+//
+// Description: A value retrieved from the target VM. The first byte is a
+// signature byte which is used to identify the type. See JDWP.Tag for the
+// possible values of this byte. It is followed immediately by the value itself.
+// This value can be an objectID (see Get ID Sizes) or a primitive value (1 to 8
+// bytes). More details about each value type can be found in the next table.
+message Value {
+  required Tag tag = 1;
+  optional ObjectID objectID = 2;
+  optional int64 primitivevalue = 3;
+}
+
+// Size: Variable
+//
+// Description: A value as described above without the signature
+// byte. This form is used when the signature information can be determined from
+// context.
+message UntaggedValue {
+  optional ObjectID objectID = 2;
+  optional int64 primitiveValue = 3;
+}
+
+// Size: Variable
+//
+// Description: A compact representation of values used with some array
+// operations. The first byte is a signature byte which is used to identify the
+// type. See JDWP.Tag for the possible values of this byte. Next is a four-byte
+// integer indicating the number of values in the sequence. This is followed by
+// the values themselves: Primitive values are encoded as a sequence of
+// untagged-values; Object values are encoded as a sequence of
+// values.
+message Arrayregion {
+  required Tag tag = 1;
+  required uint32 length = 2;
+  // Contents are UntaggedValues if primitive, Value otherwise
+  repeated UntaggedValue primitiveData = 3;
+  repeated Value objectData = 4;
+}

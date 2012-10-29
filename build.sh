@@ -15,12 +15,16 @@ timestamp=$(date +%s)
 build_bin_dir="$dir/build-bin"
 build_gen_dir="$dir/build-gen"
 build_log_dir="$dir/build-log"
+latest_build_out=latest_build.out
+latest_build_err=latest_build.err
 
 if [[ $1 == 'clean' ]]
 then
   rm -rf "$build_bin_dir"
   rm -rf "$build_gen_dir"
   rm -rf "$build_log_dir"
+  rm -rf "$latest_build_out"
+  rm -rf "$latest_build_err"
   exit 0
 fi
 
@@ -34,8 +38,6 @@ mkdir -p tmp
 
 stderr_log="$build_log_dir/$timestamp.build.sh.err"
 stdout_log="$build_log_dir/$timestamp.build.sh.out"
-latest_build_out=latest_build.out
-latest_build_err=latest_build.err
 exec > >(tee "$stdout_log")
 exec 2> >(tee "$stderr_log")
 ln -sf "$stderr_log" "$latest_build.err"

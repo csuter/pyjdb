@@ -57,7 +57,6 @@ rm -rf "$build_gen_dir/"*
 mkdir -p "$build_bin_dir"
 mkdir -p "$build_gen_dir"
 mkdir -p "$build_log_dir"
-mkdir -p tmp
 
 stderr_log="$build_log_dir/$timestamp.build.sh.err"
 stdout_log="$build_log_dir/$timestamp.build.sh.out"

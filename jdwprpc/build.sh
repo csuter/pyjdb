@@ -13,7 +13,9 @@ protoc \
   $build_gen_dir/jdwprpc/jdwp.proto \
 
 mkdir -p "$build_bin_dir/jdwprpc"
+cp "jdwprpc/__init__.py" "$build_bin_dir/jdwprpc"
 cp "$build_gen_dir/jdwprpc/jdwp.proto" "$build_bin_dir/jdwprpc"
 cp "$build_gen_dir/jdwprpc/jdwp_impl.py" "$build_bin_dir/jdwprpc"
 cp "$build_gen_dir/jdwprpc/jdwp_pb2.py" "$build_bin_dir/jdwprpc"
 cp "$build_gen_dir/jdwprpc/jdwprpc.py" "$build_bin_dir/jdwprpc"
+chmod +x "$build_bin_dir/jdwprpc/jdwprpc.py"

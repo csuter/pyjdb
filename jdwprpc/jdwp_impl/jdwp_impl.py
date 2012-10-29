@@ -1,15 +1,10 @@
-
-import collections
+import google.protobuf.descriptor
+import jdwprpc
 import logging
 import socket
 import struct
-import time
-
-import jdwprpc
-
-import google.protobuf.descriptor
-
 import threading
+import time
 
 class Jdwp:
 	def __init__(self, port = 5005):

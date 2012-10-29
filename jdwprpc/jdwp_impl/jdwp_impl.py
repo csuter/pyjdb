@@ -16,9 +16,9 @@ class Jdwp:
     self.next_req_id = 0
 
     # Initialize event listener
-    self.reader_thread_ = EventListenerThread()
-    self.reader_thread_.jdwp_ = self
-    self.reader_thread_.start()
+    self.reader_thread = EventListenerThread()
+    self.reader_thread.jdwp = self
+    self.reader_thread.start()
 
   def establish_connection(self, port):
     self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -288,8 +288,8 @@ class EventListenerThread(threading.Thread):
 
   def run(self):
     while True:
-      reply_id, flags, err, data = self.jdwp_.recv()
-      self.jdwp_.replies[reply_id] = (flags, err, data)
+      reply_id, flags, err, data = self.jdwp.recv()
+      self.jdwp.replies[reply_id] = (flags, err, data)
 
 ERROR_MESSAGE_LINES = [ line.strip().split("\t") for line in \
 """0	NONE	No error has occurred.

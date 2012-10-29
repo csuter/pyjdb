@@ -3,6 +3,7 @@ mkdir -p "$build_gen_dir/jdwprpc"
 # code generation
 log "Generating JDWP proto definitions and implementation"
 cp -r jdwprpc/codegen "$build_gen_dir/jdwprpc/"
+cp -r jdwprpc/jdwp_impl/jdwp_impl.py "$build_gen_dir/jdwprpc/"
 "$build_gen_dir/jdwprpc/codegen/generate_all_code.py" "$dir"
 
 log "Compiling jdwp proto defintions"

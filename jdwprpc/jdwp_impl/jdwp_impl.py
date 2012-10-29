@@ -7,7 +7,11 @@ import time
 
 class Jdwp:
   def __init__(self, port = 5005):
-    self.establish_connection(port)
+    # Open jdwp connection and do handshake
+    self._establish_connection(port)
+    # Initialize event listener thread
+    self._init_event_listener()
+
     # dict of req_id -> (cmd_set, cmd)
     self.requests = dict()
     # dict of req_id -> reply
@@ -15,28 +19,23 @@ class Jdwp:
     # request ids are simply created sequentially starting with 0
     self.next_req_id = 0
 
-    # Initialize event listener
-    self.reader_thread = EventListenerThread()
-    self.reader_thread.jdwp = self
-    self.reader_thread.start()
-
-  def establish_connection(self, port):
+  def _establish_connection(self, port):
     self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    retries = 5
-    while retries > 0:
-      retries -= 1
-      try:
-        self.sock.connect(('localhost', port))
-        break
-      except Exception, e:
-        print("Exception: %s" % e)
-        print("Connection failed. Retrying %d times" % retries)
-        time.sleep(1)
+    self.sock.connect(('localhost', port))
     # handshake
     self.sock.send(b'JDWP-Handshake')
     data = self.sock.recv(14)
     if data != b'JDWP-Handshake':
       raise Exception('Failed handshake')
+
+  def _init_event_listener(self):
+    self.reader_thread = EventListenerThread()
+    self.reader_thread.jdwp = self
+    self.reader_thread.start()
+
+  def event(data):
+    print("Got an event: %s" % data)
+    print("That's all we know.")
 
   def call(self, name, cmd_set, cmd, data):
     return self.pop_reply(self.call_async(name, cmd_set, cmd, data))
@@ -45,7 +44,7 @@ class Jdwp:
     req_id = self.next_id()
     self.requests[req_id] = name
     packed_data = pack_jdi_data(jdwprpc.COMMAND_SPECS[name][2], data)
-    self.send(req_id, cmd_set, cmd, packed_data)
+    self.data_send(req_id, cmd_set, cmd, packed_data)
     return req_id
 
   def get_reply(self, req_id):
@@ -67,24 +66,25 @@ class Jdwp:
     del self.requests[req_id]
     return result
 
-  def send(self, req_id, cmdset, cmd, data):
+  def data_send(self, req_id, cmdset, cmd, data):
     flags = 0
     length = 11 + len(data)
     header = struct.pack(">IIBBB", length, req_id, flags, cmdset, cmd)
+    print("SEND: %s" % data)
     self.sock.send(header)
     self.sock.send(data)
 
-  def recv(self):
+  def data_recv(self):
     header = read_all(self.sock, 11)
     length, req_id, flags, err = struct.unpack('>IIBH', header)
     remaining = length - 11
     data = read_all(self.sock, remaining)
+    print("READ: %s" % data)
     return req_id, flags, err, data
 
   def next_id(self):
     self.next_req_id += 1
     return self.next_req_id
-
 
 def read_all(sock, num_bytes):
   msgparts = []
@@ -285,11 +285,14 @@ def get_paren_substr_after(fmt, idx):
   return fmt[idx+2:close_paren]
 
 class EventListenerThread(threading.Thread):
-
   def run(self):
     while True:
-      reply_id, flags, err, data = self.jdwp.recv()
-      self.jdwp.replies[reply_id] = (flags, err, data)
+      reply_id, flags, err, data = self.jdwp.data_recv()
+      # events look like replies with error code 16484
+      if err == 16484:
+        self.jdwp.event(data)
+      else:
+        self.jdwp.replies[reply_id] = (flags, err, data)
 
 ERROR_MESSAGE_LINES = [ line.strip().split("\t") for line in \
 """0	NONE	No error has occurred.

@@ -13,6 +13,7 @@ protoc \
   $build_gen_dir/jdwprpc/jdwp.proto \
 
 mkdir -p "$build_bin_dir/jdwprpc"
+cp -r "lib/google" "$build_bin_dir/jdwprpc"
 cp "jdwprpc/__init__.py" "$build_bin_dir/jdwprpc"
 cp "$build_gen_dir/jdwprpc/jdwp.proto" "$build_bin_dir/jdwprpc"
 cp "$build_gen_dir/jdwprpc/jdwp_impl.py" "$build_bin_dir/jdwprpc"

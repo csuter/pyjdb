@@ -1,6 +1,5 @@
 python <<EOM
 import sys, vim
-sys.path.append('build-bin/')
 sys.path.append('build-bin/jdwprpc')
 sys.path.append('build-bin/vimjdb/plugin')
 import vimjdb

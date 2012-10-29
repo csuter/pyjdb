@@ -33,5 +33,6 @@ def VirtualMachine_Threads():
   print(thread_ids)
 
 def Jdwprpc_Spawn(jvm_port):
-  argv = ['tmp/test_server.py', jvm_port]
-  os.spawnvpe(os.P_NOWAIT, argv[0], argv, {'PYTHONPATH':'build-bin/jdwprpc:build-bin'})
+  cmd = "build-bin/jdwprpc/jdwprpc.py"
+  argv = [cmd, 10001, jvm_port]
+  print("spawned: %s" % os.strerror(os.spawnvpe(os.P_WAIT, cmd, argv, {'PYTHONPATH':'build-bin/jdwprpc:build-bin/'})))

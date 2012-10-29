@@ -2,9 +2,29 @@ import spec_structures
 
 def py_server_impl(spec):
   return "\n".join([
-    "import ".join(["import jdwp_pb2\n", "jdwp_impl\n", "struct\n", "google.protobuf.message\n"]),
+    "import %s" % ",".join([
+        "import jdwp_pb2",
+        "jdwp_impl",
+        "struct",
+        "google.protobuf.message",
+        "protobuf.socketrpc.server",
+        ]),
+    server_creator_function(spec.command_sets_),
     server_constants(spec.command_sets_),
     "\n".join([ command_set_impl(cs) for cs in spec.command_sets_ ])])
+
+def server_creator_function(command_sets):
+  return "\n".join([
+    "def LaunchServer(port, jvm_debug_port):",
+    "  # jdwp_impl.Jdwp encapsulates direct wire communication with the jvm",
+    "  jdwp = jdwp_impl.Jdwp(int(jvm_debug_port))",
+    "  server = protobuf.socketrpc.server.SocketRpcServer(port)",
+    "\n".join([
+      "  server.registerService(jdwprpc.%sImpl(jdwp))" % cs.name_ for cs in command_sets
+      ]),
+    "  server.run()",
+    "  return server",
+    ])
 
 def server_constants(command_sets):
   return "\n".join([

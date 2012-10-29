@@ -9,8 +9,8 @@ import pyparsing as pp
 
 def main():
   work_root = sys.argv[1]
-  specfile = "%s/data/jdwp_spec" % work_root
-  proto_header = "%s/data/jdwp.proto_header.txt" % work_root
+  specfile = "%s/build-gen/jdwprpc/codegen/jdwp_spec.txt" % work_root
+  proto_header = "%s/build-gen/jdwprpc/codegen/jdwp.proto_header.txt" % work_root
   proto_file = "%s/build-gen/jdwprpc/jdwp.proto" % work_root
   py_server_file = "%s/build-gen/jdwprpc/jdwprpc.py" % work_root
 

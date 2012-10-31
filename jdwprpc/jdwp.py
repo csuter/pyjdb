@@ -1,16 +1,55 @@
-import google.protobuf.descriptor
+#import google.protobuf.descriptor
 import jdwprpc
 import socket
 import struct
 import threading
-import time
+
+
+class Jdwp:
+  def __init__(self, port = 5005, event_callback = None):
+    self.jdwp_connection = jdwp_connection(port)
+    self.event_callback = event_callback
+
+class Connection:
+  def __init__(self, port = 5005):
+    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+    self.sock.connect(('localhost', port))
+    self._handshake()
+
+  def _handshake(self):
+    self.sock.send(b'JDWP-Handshake')
+    data = self.sock.recv(14)
+    if data != b'JDWP-Handshake':
+      raise Exception('Handshake failed')
+
+  def send_command_packet(self, request_id, command_set_id, command_id, data = None):
+    flags = 0
+    packet_length = 11 + len(data)
+    header = struct.pack(
+        ">IIBBB",
+        packet_length,
+        self.request_id,
+        flags,
+        self.command_set_id,
+        self.command_id)
+    sock.send(header)
+    sock.send(self.data)
+
+  def receive_reply_packet(self):
+    header = read_num_bytes(self.sock, 11)
+    length, req_id, flags, err = struct.unpack('>IIBH', header)
+    remaining = length - 11
+    data = read_num_bytes(self.sock, remaining)
+    return req_id, flags, err, data
+
+
 
 class Jdwp:
   def __init__(self, port = 5005):
-    # Open jdwp connection and do handshake
-    self._establish_connection(port)
-    # Initialize event listener thread
-    self._init_event_listener()
+
+    self.reader_thread = ReaderThread(self)
+    self.reader_thread.start()
 
     # dict of req_id -> (cmd_set, cmd)
     self.requests = dict()
@@ -19,35 +58,17 @@ class Jdwp:
     # request ids are simply created sequentially starting with 0
     self.next_req_id = 0
 
-  def _establish_connection(self, port):
-    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    self.sock.connect(('localhost', port))
-    # handshake
-    self.sock.send(b'JDWP-Handshake')
-    data = self.sock.recv(14)
-    if data != b'JDWP-Handshake':
-      raise Exception('Failed handshake')
-
-  def _init_event_listener(self):
-    self.reader_thread = EventListenerThread()
-    self.reader_thread.jdwp = self
-    self.reader_thread.start()
-
-  def event(data):
-    print("Got an event: %s" % data)
-    print("That's all we know.")
-
   def call(self, name, cmd_set, cmd, data):
-    return self.pop_reply(self.call_async(name, cmd_set, cmd, data))
+    return self._pop_reply(self._call_async(name, cmd_set, cmd, data))
 
-  def call_async(self, name, cmd_set, cmd, data):
+  def _call_async(self, name, cmd_set, cmd, data):
     req_id = self.next_id()
     self.requests[req_id] = name
     packed_data = pack_jdi_data(jdwprpc.COMMAND_SPECS[name][2], data)
     self.data_send(req_id, cmd_set, cmd, packed_data)
     return req_id
 
-  def get_reply(self, req_id):
+  def _get_reply(self, req_id):
     if req_id not in self.replies:
       while req_id not in self.replies:
         1
@@ -60,40 +81,31 @@ class Jdwp:
       return unpack_jdi_data(jdwprpc.COMMAND_SPECS[key][3], data)[0]
     return []
 
-  def pop_reply(self, req_id):
+  def _pop_reply(self, req_id):
     result = self.get_reply(req_id)
     del self.replies[req_id]
     del self.requests[req_id]
     return result
 
-  def data_send(self, req_id, cmdset, cmd, data):
+  def _data_send(self, req_id, cmdset, cmd, data):
     flags = 0
     length = 11 + len(data)
     header = struct.pack(">IIBBB", length, req_id, flags, cmdset, cmd)
-    print("SEND: %s" % data)
     self.sock.send(header)
     self.sock.send(data)
-
-  def data_recv(self):
-    header = read_all(self.sock, 11)
-    length, req_id, flags, err = struct.unpack('>IIBH', header)
-    remaining = length - 11
-    data = read_all(self.sock, remaining)
-    print("READ: %s" % data)
-    return req_id, flags, err, data
 
   def next_id(self):
     self.next_req_id += 1
     return self.next_req_id
 
-def read_all(sock, num_bytes):
-  msgparts = []
+def read_num_bytes(sock, num_bytes):
+  msgparts = bytearray()
   remaining = num_bytes
   while remaining > 0:
     chunk = sock.recv(remaining)
     msgparts.append(chunk)
     remaining -= len(chunk)
-  return b''.join(msgparts)
+  return msgparts
 
 
 def unpack_jdi_data(fmt, data):
@@ -284,7 +296,12 @@ def get_paren_substr_after(fmt, idx):
     raise Exception("jdi_data fmt exception: no matching ')' for paren at %d of '%s'" % (idx, fmt))
   return fmt[idx+2:close_paren]
 
-class EventListenerThread(threading.Thread):
+class ReaderThread(threading.Thread):
+  def __init__(self, jdwp):
+    super(ReaderThread, self).__init__(group="jdwp", name="jdwp_reader")
+    self.jdwp = jdwp
+    self.setDaemon(True)
+
   def run(self):
     while True:
       reply_id, flags, err, data = self.jdwp.data_recv()

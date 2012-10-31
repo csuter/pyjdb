@@ -2,7 +2,6 @@ import spec_structures
 
 def jdwprpc_impl(spec):
   return "\n".join([
-    "#!/usr/bin/python2",
     "import %s" % ",".join([
         "google.protobuf.message",
         "jdwp_impl",
@@ -19,18 +18,17 @@ def jdwprpc_impl(spec):
 def main_clause():
   return "\n".join([
     "if __name__ == '__main__':",
-    "  sys.stdout = open('/tmp/jdwprpc.out', 'w')",
-    "  sys.stderr = open('/tmp/jdwprpc.err', 'w')",
-    "  LaunchServer(sys.argv[1], sys.argv[2])" ])
+    "  LaunchServer(int(sys.argv[1]), int(sys.argv[2]))" ])
 
 def server_creator_function(command_sets):
   return "\n".join([
     "def LaunchServer(port, jvm_debug_port):",
+    "  print(\"Launching server\")",
     "  # jdwp_impl.Jdwp encapsulates direct wire communication with the jvm",
     "  jdwp = jdwp_impl.Jdwp(int(jvm_debug_port))",
     "  server = protobuf.socketrpc.server.SocketRpcServer(port)",
     "\n".join([
-      "  server.registerService(jdwprpc.%sImpl(jdwp))" % cs.name for cs in command_sets
+      "  server.registerService(%sImpl(jdwp))" % cs.name for cs in command_sets
       ]),
     "  server.run()",
     "  return server",
@@ -134,7 +132,7 @@ def select_repeat_request_arg_unpacking_impl(data, cs, cmd, arg, idx):
   return "\n".join([
       "    select_repeat = []",
       "    for item in request.%s:" % arg.name,
-      "      select_repeat.append(jdwp_impl.proto_todata(item))",
+      "      select_repeat.append(jdwp_impl.proto_to_data(item))",
       "    data.append(select_repeat)",
       ])
 

@@ -62,7 +62,7 @@ stderr_log="$build_log_dir/$timestamp.build.sh.err"
 stdout_log="$build_log_dir/$timestamp.build.sh.out"
 exec > >(tee "$stdout_log")
 exec 2> >(tee "$stderr_log")
-ln -sf "$stderr_log" "$latest_build.err"
+ln -sf "$stderr_log" "$latest_build_err"
 ln -sf "$stdout_log" "$latest_build_out"
 
 log "Logging to $stdout_log and $stderr_log"

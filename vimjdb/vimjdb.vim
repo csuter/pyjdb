@@ -12,7 +12,6 @@ function! Vimjdb_start(jvm_port)
   endif
   " ensure jdwprpc is up
   py vimjdb.Jdwprpc_Spawn(vim.eval('a:jvm_port'))
-  py print(vimjdb.VirtualMachine_Version())
 endfunction
 
 command! -nargs=1 Vimjdb :call Vimjdb_start(<args>)

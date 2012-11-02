@@ -33,6 +33,11 @@ function log {
   echo "$(date +"[%Y-%m-%d %H:%M:%S]") $@"
 }
 
+log '\    / | |\    /|    o    | |   '
+log ' \  /  | | \  / |    |  __| |__ '
+log '  \/   | |  \/  |    | /  | |  \'
+log ' build            \__| \__| |__/'
+
 timestamp=$(date +%s)
 
 build_bin_dir="$dir/build-bin"

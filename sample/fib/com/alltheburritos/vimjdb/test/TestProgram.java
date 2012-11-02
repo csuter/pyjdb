@@ -1,4 +1,4 @@
-package com.alltheburritos.debug.test;
+package com.alltheburritos.vimjdb.test;
 
 public class TestProgram {
 

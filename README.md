@@ -1,8 +1,9 @@
 vimjdb
 ======
 
-java debug support in vim (and oh so much more)vimjdb enables one to control a running jvm from inside of vim.
-it is not a hack hobbled together from named pipes and jdb.
+java debug support in vim (and oh so much more)vimjdb enables one to control a
+running jvm from inside of vim.  it is not a hack hobbled together from named
+pipes and jdb.
 
 the jvm can be controlled by a remote program by way of their java platform
 debugger architecture (jpda). a client connects on a user-selected port and
@@ -18,15 +19,17 @@ somewhat interchangeably).
 
 vimjdb has several components, then:
  + a vim plugin to a debug interface inside vim 
- + a debug "state server" to maintain state and handle asynchronous actions
-   and push events, which can't be done in vim due to its single-threadedness
  + a set of protocol buffer and rpc service definitions wrapping the jdwp
  + an httprpc server implementing the rpc service interface, which communicates
    with the running target jvm
 
 names of things:
  + vimjdb - the vim pluing
- + vjdss - the vim/jvm debug state server
  + jdwppb - the protobuf msg/rpc definitions (generated [mostly])
  + jdwprpc - the jdwp rpc server that implements jdwppb and talks to the jvm
              (also mostly generated)
+
+
+running the build.sh script in the top level directory will initiate the build
+proccess. 'build.sh clean' will clean up anything created by the build. test.sh
+runs automated tests

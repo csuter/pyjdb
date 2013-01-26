@@ -66,7 +66,7 @@ for i in $(find jdwprpc -name "*_test.py")
 do
   log "*** Running python test $i ***"
   cd "$dir" # ensure we're back where we started
-  PYTHONPATH="$build_bin_dir/jdwprpc" python2 $i
+  PYTHONPATH="$build_bin_dir/jdwprpc" python2 $i -v
 done
 
 # cleanup any lingering java processes

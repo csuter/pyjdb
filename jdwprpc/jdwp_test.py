@@ -13,20 +13,21 @@ from jdwp import *
 class TestJdwpPackage(unittest.TestCase):
   def setUp(self):
     # boot up the sample java program in target jvm
-    test_target_script = "build-bin/sample/run.sh 2>&1 >/dev/null"
-    self.test_target_subprocess = subprocess.Popen(test_target_script, shell=True)
+    test_target_script = "build-bin/sample/run.sh"
+    self.test_target_subprocess = subprocess.Popen(test_target_script)
     time.sleep(1)
 
     # start up a jdwp connection
     self.jdwp = Jdwp(5005, self.event_callback)
   
   def event_callback(self, event):
-    None
+    #print("EVENT: %s" % event)
+    return
 
   def tearDown(self):
     # kill target jvm
     self.jdwp.disconnect()
-    self.test_target_subprocess.send_signal(signal.SIGTERM)
+    self.test_target_subprocess.send_signal(signal.SIGKILL)
 
   def test_creation(self):
     # make sure jdwp object was created
@@ -79,14 +80,12 @@ class TestJdwpPackage(unittest.TestCase):
     #  Command 1 - Set
     event_request_set_request = \
         [ jdwp_pb2.EventKind_CLASS_PREPARE, jdwp_pb2.SuspendPolicy_NONE, []]
-    err, event_request_set_response = \
-        self.jdwp.send_command_await_reply(15, 1, event_request_set_request)
+    self.jdwp.send_command_no_wait(15, 1, event_request_set_request)
 
     # CommandSet 1 - VirtualMachine
-    #  Command 4 - AllClasses
+    #  Command 4 - AllThreads
     err, thread_ids = self.jdwp.send_command_await_reply(1, 4)
     # CommandSet 11 - ThreadReference
-    #  Command 1 - Name
     #  Command 3 - Resume
     for thread_id in thread_ids:
       self.jdwp.send_command_no_wait(11, 3, thread_id)
@@ -96,6 +95,29 @@ class TestJdwpPackage(unittest.TestCase):
     self.assertTrue(
         "Lcom/alltheburritos/vimjdb/test/TestProgram;" in \
         [ event[1][1][4] for event in self.jdwp.events if event[1][0] == 8 ])
+
+  def test_set_breakpoint(self):
+    # in this test we will
+    #   1. set a breakpoint
+    #   2. resume all threads
+    #   3. catch and verify data of breakpoint event
+
+    # CommandSet 15 - EventRequest
+    #  Command 1 - Set
+    event_request_set_request = [
+        jdwp_pb2.EventKind_BREAKPOINT,
+        jdwp_pb2.SuspendPolicy_ALL,
+        [[5, "com.alltheburritos.vimjdb.test.TestProgram"]] ]
+
+    # CommandSet 1 - VirtualMachine
+    #  Command 4 - AllThreads
+    err, thread_ids = self.jdwp.send_command_await_reply(1, 4)
+    # CommandSet 11 - ThreadReference
+    #  Command 3 - Resume
+    for thread_id in thread_ids:
+      self.jdwp.send_command_no_wait(11, 3, thread_id)
+
+    print("events: %s" % self.jdwp.events)
 
 if __name__ == '__main__':
   unittest.main()

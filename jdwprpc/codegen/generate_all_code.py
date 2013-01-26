@@ -1,22 +1,29 @@
 #!/usr/bin/python
 
-import re
-import spec_structures
-import sys
 import jdwprpc_structures
 import proto_structures
 import pyparsing as pp
+import re
+import spec_structures
+import sys
 
 def main():
   work_root = sys.argv[1]
+  # input files
   specfile = "%s/build-gen/jdwprpc/codegen/jdwp_spec.txt" % work_root
   proto_header = "%s/build-gen/jdwprpc/codegen/jdwp.proto_header.txt" % work_root
+
+  # output files
   proto_file = "%s/build-gen/jdwprpc/jdwp.proto" % work_root
   jdwprpc_file = "%s/build-gen/jdwprpc/jdwprpc.py" % work_root
 
   spec = load_spec(specfile)
 
+  # generate the protobuf message and service/rpc definitions file
   generate_protofile(proto_header, spec, proto_file)
+
+  # generate the socketrpc-based server implementing the service defs from
+  # the above generated protofile
   generate_jdwprpc(spec, jdwprpc_file)
 
 def load_spec(specfile, with_strings = False):
@@ -49,8 +56,8 @@ def generate_protofile(proto_header, spec, proto_file):
   with open(proto_file, 'w') as f: f.write("\n".join([header, pb]))
 
 def generate_jdwprpc(spec, jdwprpc_file):
-  py = jdwprpc_structures.jdwprpc_impl(spec)
-  with open(jdwprpc_file, 'w') as f: f.write(py)
+  python_code = jdwprpc_structures.jdwprpc(spec)
+  with open(jdwprpc_file, 'w') as f: f.write(python_code)
 
 if __name__ == '__main__':
   main()

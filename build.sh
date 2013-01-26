@@ -53,6 +53,7 @@ then
   rm -rf "$build_log_dir"
   rm -rf "$latest_build_out"
   rm -rf "$latest_build_err"
+  log 'All clean!'
   exit 0
 fi
 

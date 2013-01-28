@@ -2,8 +2,7 @@ import jdwprpc
 import pyparsing as pp
 import struct
 
-def pack_jdwp_request(
-    cmd_set_id, cmd_id, request_data_unpacked):
+def pack_jdwp_request(cmd_set_id, cmd_id, request_data_unpacked):
   key = jdwprpc.command_specs_key(cmd_set_id, cmd_id)
   fmt = jdwprpc.COMMAND_SPECS[key][2]
   return pack_jdwp_data(fmt, request_data_unpacked)
@@ -145,7 +144,7 @@ def pack_jdwp_data(fmt, unpacked_data):
     elif c == 'S':
       strlen = len(unpacked_data[pos])
       result.extend(struct.pack(">I", strlen))
-      result.extend(bytearray(unpacked_data[pos][0],"UTF-8"))
+      result.extend(bytearray(unpacked_data[pos],"UTF-8"))
       pos += 1
     elif c == 'A':
       raise Exception("IMPLEMENT ARRAY REGION PACKING")

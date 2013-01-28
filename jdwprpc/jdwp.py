@@ -10,7 +10,6 @@ Author: Christopher Suter (cgs1019@gmail.com)
 """
 
 import datautils
-import jdwprpc
 import socket
 import struct
 import threading
@@ -22,7 +21,7 @@ class Jdwp:
     self.reqs_by_req_id = dict()
     self.replies_by_req_id = dict()
     self.events = []
-    self.next_req_id = 0
+    self.next_req_id = 1
     self.event_callback = event_callback
 
     self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

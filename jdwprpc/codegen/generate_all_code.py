@@ -28,7 +28,7 @@ def main():
 
 def load_spec(specfile, with_strings = False):
   with open(specfile, 'r') as f: spec = f.read()
-  spec = re.sub("\s*=\s*", "=", spec)
+  spec = re.sub("\s*=\s*", "=", spec)  # cleanup space around equal signs
   parsed_jdwp_spec = spec_file_grammar(with_strings).parseString(spec)
   return spec_structures.Spec(parsed_jdwp_spec)
 

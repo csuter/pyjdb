@@ -5,6 +5,10 @@ java debug support in vim (and oh so much more)vimjdb enables one to control a
 running jvm from inside of vim.  it is not a hack hobbled together from named
 pipes and jdb.
 
+Dependencies:
+ + protobuf - http://code.google.com/p/protobuf/
+ + pyparsing - http://pyparsing.wikispaces.com/
+
 the jvm can be controlled by a remote program by way of their java platform
 debugger architecture (jpda). a client connects on a user-selected port and
 communicates according to the java debug wire protocol (jdwp). the jdwp is

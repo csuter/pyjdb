@@ -109,58 +109,52 @@ class TestJdwpPackage(unittest.TestCase):
         [ event[1][1][4] for event in self.jdwp.events if event[1][0] == 8 ])
 
   def test_set_breakpoint(self):
+
+    # we have to first await the loading of our class, so we set an event.
     event_request_set_request = [
         jdwp_pb2.EventKind_CLASS_PREPARE,
         jdwp_pb2.SuspendPolicy_ALL,
         [[5, "com.alltheburritos.vimjdb.test.TestProgram"]] ]
+    self.jdwp.send_command_await_reply(15, 1, event_request_set_request)
 
-    err, data = self.jdwp.send_command_await_reply(
-        15, 1, event_request_set_request)
-    #print("err, data: ", err, data)
+    # send vm resume to start things off
+    self.jdwp.send_command_await_reply(1, 9)
 
-    err, data = self.jdwp.send_command_await_reply(1, 9)
-    #print("err, data: ", err, data)
-
+    # wait for class prepare event
     class_prepare_event = \
         self.await_event_kind(jdwp_pb2.EventKind_CLASS_PREPARE)
     class_id = class_prepare_event[1][1][3]
 
-    methods_request = [ class_id ]
-    err, data = self.jdwp.send_command_await_reply(
-        2, 5, methods_request)
-    #print("err, data: ", err, data)
-
+    # get class methods
+    err, data = self.jdwp.send_command_await_reply(2, 5, [class_id])
     for method in data:
       if method[1] == u'main':
+        # find main method id
         main_method_id = method[0]
 
-    event_request_set_request = [
+    # set breakpoint
+    breakpoint_request = [
         jdwp_pb2.EventKind_BREAKPOINT,
         jdwp_pb2.SuspendPolicy_ALL,
         [[7, [1, class_id, main_method_id, 0]]]]
-    err, data = self.jdwp.send_command_await_reply(
-        15, 1, event_request_set_request)
-    #print("err, data: ", err, data)
+    err, data = self.jdwp.send_command_await_reply(15, 1, breakpoint_request)
     breakpoint_request_id = data[0]
 
-    err, data = self.jdwp.send_command_await_reply(1, 9)
-    #print("err, data: ", err, data)
+    # send vm resume
+    self.jdwp.send_command_await_reply(1, 9)
 
+    # wait for breakpoint event
     breakpoint_event = \
         self.await_event_kind(jdwp_pb2.EventKind_BREAKPOINT, 1)
-    self.assertEquals(
-        breakpoint_event,
-        [jdwp_pb2.SuspendPolicy_ALL, [jdwp_pb2.EventKind_BREAKPOINT,
-            [breakpoint_request_id,
-             1,  # thread_id
-             (1,  # type_tag class
-              class_id,
-              main_method_id,
-              0)]]]  # index 0 (start of method)
-        )
+    expected_breakpoint_event = \
+        [jdwp_pb2.SuspendPolicy_ALL,
+            [jdwp_pb2.EventKind_BREAKPOINT,
+                [breakpoint_request_id,
+                 1,  # thread_id (get programmatically?)
+                 (1, class_id, main_method_id, 0)]]]
 
-    #print(breakpoint_event)
-
+    # breakpoint should look as expected              
+    self.assertEquals(breakpoint_event, expected_breakpoint_event)
 
 if __name__ == '__main__':
   unittest.main()

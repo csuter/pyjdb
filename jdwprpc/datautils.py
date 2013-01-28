@@ -146,6 +146,12 @@ def pack_jdwp_data(fmt, unpacked_data):
       result.extend(struct.pack(">I", strlen))
       result.extend(bytearray(unpacked_data[pos],"UTF-8"))
       pos += 1
+    elif c == 'X':
+      result.extend(struct.pack(">B", unpacked_data[pos][0]))
+      result.extend(struct.pack(">Q", unpacked_data[pos][1]))
+      result.extend(struct.pack(">Q", unpacked_data[pos][2]))
+      result.extend(struct.pack(">Q", unpacked_data[pos][3]))
+      pos += 1
     elif c == 'A':
       raise Exception("IMPLEMENT ARRAY REGION PACKING")
     elif c == '?':

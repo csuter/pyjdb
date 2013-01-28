@@ -8,6 +8,8 @@ import subprocess
 import time
 import unittest
 
+import pprint
+
 from jdwp import *
 
 class TestJdwpPackage(unittest.TestCase):
@@ -28,6 +30,16 @@ class TestJdwpPackage(unittest.TestCase):
     # kill target jvm
     self.jdwp.disconnect()
     self.test_target_subprocess.send_signal(signal.SIGKILL)
+
+  def await_event_kind(self, event_kind, timeout = 0):
+    start = time.time()
+    while True:
+      if timeout > 0 and time.time() - start > timeout:
+        raise Exception("Timed out")
+      for event in self.jdwp.events:
+        if event[1][0] == event_kind:
+          return event
+      time.sleep(.05)
 
   def test_creation(self):
     # make sure jdwp object was created
@@ -97,27 +109,58 @@ class TestJdwpPackage(unittest.TestCase):
         [ event[1][1][4] for event in self.jdwp.events if event[1][0] == 8 ])
 
   def test_set_breakpoint(self):
-    # in this test we will
-    #   1. set a breakpoint
-    #   2. resume all threads
-    #   3. catch and verify data of breakpoint event
-
-    # CommandSet 15 - EventRequest
-    #  Command 1 - Set
     event_request_set_request = [
-        jdwp_pb2.EventKind_BREAKPOINT,
+        jdwp_pb2.EventKind_CLASS_PREPARE,
         jdwp_pb2.SuspendPolicy_ALL,
         [[5, "com.alltheburritos.vimjdb.test.TestProgram"]] ]
 
-    # CommandSet 1 - VirtualMachine
-    #  Command 4 - AllThreads
-    err, thread_ids = self.jdwp.send_command_await_reply(1, 4)
-    # CommandSet 11 - ThreadReference
-    #  Command 3 - Resume
-    for thread_id in thread_ids:
-      self.jdwp.send_command_no_wait(11, 3, thread_id)
+    err, data = self.jdwp.send_command_await_reply(
+        15, 1, event_request_set_request)
+    #print("err, data: ", err, data)
 
-    print("events: %s" % self.jdwp.events)
+    err, data = self.jdwp.send_command_await_reply(1, 9)
+    #print("err, data: ", err, data)
+
+    class_prepare_event = \
+        self.await_event_kind(jdwp_pb2.EventKind_CLASS_PREPARE)
+    class_id = class_prepare_event[1][1][3]
+
+    methods_request = [ class_id ]
+    err, data = self.jdwp.send_command_await_reply(
+        2, 5, methods_request)
+    #print("err, data: ", err, data)
+
+    for method in data:
+      if method[1] == u'main':
+        main_method_id = method[0]
+
+    event_request_set_request = [
+        jdwp_pb2.EventKind_BREAKPOINT,
+        jdwp_pb2.SuspendPolicy_ALL,
+        [[7, [1, class_id, main_method_id, 0]]]]
+    err, data = self.jdwp.send_command_await_reply(
+        15, 1, event_request_set_request)
+    #print("err, data: ", err, data)
+    breakpoint_request_id = data[0]
+
+    err, data = self.jdwp.send_command_await_reply(1, 9)
+    #print("err, data: ", err, data)
+
+    breakpoint_event = \
+        self.await_event_kind(jdwp_pb2.EventKind_BREAKPOINT, 1)
+    self.assertEquals(
+        breakpoint_event,
+        [jdwp_pb2.SuspendPolicy_ALL, [jdwp_pb2.EventKind_BREAKPOINT,
+            [breakpoint_request_id,
+             1,  # thread_id
+             (1,  # type_tag class
+              class_id,
+              main_method_id,
+              0)]]]  # index 0 (start of method)
+        )
+
+    #print(breakpoint_event)
+
 
 if __name__ == '__main__':
   unittest.main()

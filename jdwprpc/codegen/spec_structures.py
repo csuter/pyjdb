@@ -178,4 +178,3 @@ typed-sequence	Value	A""".split("\n") ]
 
 SPECMAP_PROTO_TYPES = dict([ (line[0], line[1]) for line in SPECMAP_LINES ])
 SPECMAP_STRUCT_FMTS = dict([ (line[0], line[2]) for line in SPECMAP_LINES ])
-

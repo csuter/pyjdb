@@ -10,6 +10,7 @@ Author: Christopher Suter (cgs1019@gmail.com)
 """
 
 import datautils
+import jdwprpc
 import socket
 import struct
 import threading
@@ -17,7 +18,7 @@ import time
 
 class Jdwp:
   '''Provides a simple interface for interacting with a jdwp wire connection'''
-  def __init__(self, port, event_callback):
+  def __init__(self, port, event_callback=None):
     self.reqs_by_req_id = dict()
     self.replies_by_req_id = dict()
     self.events = []
@@ -46,8 +47,8 @@ class Jdwp:
     '''Generate req_id, pack req data, and send cmd to jvm. Returns req_id'''
     req_id = self.generate_req_id()
     self.reqs_by_req_id[req_id] = (cmd_set_id, cmd_id, req_unpacked)
-    req_packed = datautils.pack_jdwp_request(
-        cmd_set_id, cmd_id, req_unpacked)
+    fmt = jdwprpc.command_spec_request_fmt(cmd_set_id, cmd_id)
+    req_packed = datautils.to_bytestring(fmt, req_unpacked)
     length = 11 + len(req_packed)
     header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
     self.sock.send(header + req_packed)
@@ -65,10 +66,10 @@ class Jdwp:
 
   # END EXTERNAL API; The following methods are for package-internal use only.
 
-  def report_event(self, event_unpacked):
-    self.events.append(event_unpacked)
+  def report_event(self, req_id, event_unpacked):
+    self.events.append((req_id, event_unpacked))
     if self.event_callback != None:
-      self.event_callback(event_unpacked)
+      self.event_callback(req_id, event_unpacked)
 
   def report_reply(self, req_id, reply_unpacked):
     self.replies_by_req_id[req_id] = (0, reply_unpacked)
@@ -96,6 +97,7 @@ class Jdwp:
     self.next_req_id += 1
     return result
 
+EVENT_MAGIC_NUMBER = 0x4064
 class ReaderThread(threading.Thread):
   '''Listens for, parses replies/events; forwards results to Jdwp'''
   def __init__(self, jdwp):
@@ -113,13 +115,15 @@ class ReaderThread(threading.Thread):
   def handle_reply(self, req_id, flags, err, reply_packed):
     if req_id == -1:
       return
-    if err == 0x4064: # this is actually an event message
-      event_unpacked = datautils.unpack_jdwp_reply(64, 100, reply_packed)
-      self.jdwp.report_event(event_unpacked)
-      return
-    if err != 0:
+    if err != EVENT_MAGIC_NUMBER and err != 0:
       self.jdwp.report_error(req_id, err)
       return
-    cmd_set_id, cmd_id, _ = self.jdwp.reqs_by_req_id[req_id]
-    self.jdwp.report_reply(
-        req_id, datautils.unpack_jdwp_reply(cmd_set_id, cmd_id, reply_packed))
+    if err == EVENT_MAGIC_NUMBER: # this is actually an event message
+      cmd_set_id, cmd_id = 64, 100
+      report_function = self.jdwp.report_event
+    else:
+      cmd_set_id, cmd_id, _ = self.jdwp.reqs_by_req_id[req_id]
+      report_function = self.jdwp.report_reply
+    fmt = jdwprpc.command_spec_reply_fmt(cmd_set_id, cmd_id)
+    result = datautils.from_bytearray(fmt, reply_packed)
+    report_function(req_id, result)

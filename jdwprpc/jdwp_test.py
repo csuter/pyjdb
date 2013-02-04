@@ -8,8 +8,6 @@ import subprocess
 import time
 import unittest
 
-import pprint
-
 from jdwp import *
 
 class TestJdwpPackage(unittest.TestCase):
@@ -18,12 +16,10 @@ class TestJdwpPackage(unittest.TestCase):
     test_target_script = "build-bin/sample/run.sh"
     self.test_target_subprocess = subprocess.Popen(test_target_script)
     time.sleep(1)
-
     # start up a jdwp connection
     self.jdwp = Jdwp(5005, self.event_callback)
   
-  def event_callback(self, event):
-    #print("EVENT: %s" % event)
+  def event_callback(self, request_id, event):
     return
 
   def tearDown(self):
@@ -36,23 +32,15 @@ class TestJdwpPackage(unittest.TestCase):
     while True:
       if timeout > 0 and time.time() - start > timeout:
         raise Exception("Timed out")
-      for event in self.jdwp.events:
+      for request_id, event in self.jdwp.events:
         if event[1][0] == event_kind:
-          return event
+          return request_id, event
       time.sleep(.05)
 
   def test_creation(self):
     # make sure jdwp object was created
     self.assertTrue(self.jdwp != None)
-    tries = 3
-    num_true = 0
-    vm_start_event_unpacked = [2, [90, [0, 1]]]
-    while tries > 0:
-      num_true += vm_start_event_unpacked in self.jdwp.events
-      time.sleep(.1)
-      tries -= 1
-    # make sure jdwp vm_start event was sent
-    self.assertGreater(num_true, 0)
+    self.await_event_kind(jdwp_pb2.EventKind_VM_START, 2)
 
   def test_version(self):
     system_java_version = subprocess.check_output(
@@ -91,22 +79,17 @@ class TestJdwpPackage(unittest.TestCase):
     # CommandSet 15 - EventRequest
     #  Command 1 - Set
     event_request_set_request = \
-        [ jdwp_pb2.EventKind_CLASS_PREPARE, jdwp_pb2.SuspendPolicy_NONE, []]
+        [ jdwp_pb2.EventKind_CLASS_PREPARE, jdwp_pb2.SuspendPolicy_NONE ]
     self.jdwp.send_command_no_wait(15, 1, event_request_set_request)
 
-    # CommandSet 1 - VirtualMachine
-    #  Command 4 - AllThreads
-    err, thread_ids = self.jdwp.send_command_await_reply(1, 4)
-    # CommandSet 11 - ThreadReference
-    #  Command 3 - Resume
-    for thread_id in thread_ids:
-      self.jdwp.send_command_no_wait(11, 3, thread_id)
-
-    time.sleep(.1)
+    # send vm resume to start things off
+    self.jdwp.send_command_await_reply(1, 9)
+    
+    time.sleep(.5)
 
     self.assertTrue(
         "Lcom/alltheburritos/vimjdb/test/TestProgram;" in \
-        [ event[1][1][4] for event in self.jdwp.events if event[1][0] == 8 ])
+        [ event[1][1][4] for request_id, event in self.jdwp.events if event[1][0] == 8 ])
 
   def test_set_breakpoint(self):
 
@@ -114,15 +97,15 @@ class TestJdwpPackage(unittest.TestCase):
     event_request_set_request = [
         jdwp_pb2.EventKind_CLASS_PREPARE,
         jdwp_pb2.SuspendPolicy_ALL,
-        [[5, "com.alltheburritos.vimjdb.test.TestProgram"]] ]
+        [5, ["com.alltheburritos.vimjdb.test.TestProgram"]]]
     self.jdwp.send_command_await_reply(15, 1, event_request_set_request)
 
     # send vm resume to start things off
     self.jdwp.send_command_await_reply(1, 9)
 
     # wait for class prepare event
-    class_prepare_event = \
-        self.await_event_kind(jdwp_pb2.EventKind_CLASS_PREPARE)
+    request_id, class_prepare_event = \
+        self.await_event_kind(jdwp_pb2.EventKind_CLASS_PREPARE, 2)
     class_id = class_prepare_event[1][1][3]
 
     # get class methods
@@ -136,7 +119,7 @@ class TestJdwpPackage(unittest.TestCase):
     breakpoint_request = [
         jdwp_pb2.EventKind_BREAKPOINT,
         jdwp_pb2.SuspendPolicy_ALL,
-        [[7, [1, class_id, main_method_id, 0]]]]
+        [7, [(1, class_id, main_method_id, 0)]]]
     err, data = self.jdwp.send_command_await_reply(15, 1, breakpoint_request)
     breakpoint_request_id = data[0]
 
@@ -144,7 +127,7 @@ class TestJdwpPackage(unittest.TestCase):
     self.jdwp.send_command_await_reply(1, 9)
 
     # wait for breakpoint event
-    breakpoint_event = \
+    request_id, breakpoint_event = \
         self.await_event_kind(jdwp_pb2.EventKind_BREAKPOINT, 1)
     expected_breakpoint_event = \
         [jdwp_pb2.SuspendPolicy_ALL,

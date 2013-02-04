@@ -27,10 +27,10 @@ def server_creator_function(command_sets):
       "def LaunchServer(port, jvm_debug_port):",
       "  print(\"Launching server\")",
       "  # jdwp.Jdwp encapsulates direct wire communication with the jvm",
-      "  jdwp = jdwp.Jdwp(int(jvm_debug_port))",
+      "  jdwp_connection = jdwp.Jdwp(int(jvm_debug_port))",
       "  server = protobuf.socketrpc.server.SocketRpcServer(port)",
       "\n".join([
-          "  server.registerService(%sImpl(jdwp))" % cs.name for cs in command_sets
+          "  server.registerService(%sImpl(jdwp_connection))" % cs.name for cs in command_sets
           ]),
       "  server.run()",
       "  return server",
@@ -38,11 +38,9 @@ def server_creator_function(command_sets):
 
 def server_constants(command_sets):
   return "\n".join([
-      "COMMAND_SPECS = dict()",
-      "def command_specs_key(cmd_set_id, cmd_id):",
-      "  return \"%s-%s\" % (cmd_set_id, cmd_id)",
+      "COMMAND_SPECS = {",
       "\n".join(["\n".join([
-          "COMMAND_SPECS[\"%s-%s\"] = (%s,%s,\"%s\",\"%s\")" % (
+          "  '%s-%s': (%s,%s,'%s','%s')," % (
               command_set.id, command.id,
               command_set.id, command.id,
               command.request.pack_fmt(),
@@ -50,13 +48,20 @@ def server_constants(command_sets):
               )
           for command in command_set.commands ])
       for command_set in command_sets ]),
+      "}",
+      "def command_spec_request_fmt(cmd_set_id, cmd_id):",
+      "  key = \"%s-%s\" % (cmd_set_id, cmd_id)",
+      "  return COMMAND_SPECS[key][2]",
+      "def command_spec_reply_fmt(cmd_set_id, cmd_id):",
+      "  key = \"%s-%s\" % (cmd_set_id, cmd_id)",
+      "  return COMMAND_SPECS[key][3]",
       ])
 
 def command_set_impl(cs):
   return "\n".join([
       "class %sImpl(jdwp_pb2.%s):" % (cs.name, cs.name),
-      "  def __init__(self, jdwp):",
-      "    self.jdwp = jdwp",
+      "  def __init__(self, jdwp_connection):",
+      "    self.jdwp_connection = jdwp_connection",
       "\n".join([ "%s" % command_impl(cs, cmd) for cmd in cs.commands ])
       ])
 
@@ -140,7 +145,7 @@ def select_repeat_request_arg_unpacking_impl(data, cs, cmd, arg, idx):
   return "\n".join([
       "    select_repeat = []",
       "    for item in request.%s:" % arg.name,
-      "      select_repeat.append(jdwp.proto_to_data(item))",
+      "      select_repeat.append(jdwp_connection.proto_to_data(item))",
       "    data.append(select_repeat)",
       ])
 

@@ -6,10 +6,6 @@ import vimjdb
 EOM
 
 function! Vimjdb_start(jvm_port)
-  if v:servername == ""
-    echo "To use Vimjdb, please restart with an argument to --servername"
-    return
-  endif
   " ensure jdwprpc is up
   py vimjdb.Jdwprpc_Spawn(vim.eval('a:jvm_port'))
 endfunction

@@ -9,10 +9,8 @@ dir=$(cd "$dir" && pwd)
 echo "dir: $dir"
 
 cd "$dir" 
-pwd
-ls -l
 
-echo PID: $!
+echo PID: $PID
 
 echo "executing: /usr/bin/python2 jdwprpc.py $@"
 exec /usr/bin/python2 jdwprpc.py $@

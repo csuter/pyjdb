@@ -31,18 +31,12 @@ def command_proto_def(command):
       request_proto_def(command.request),
       { spec_structures.Response:response_proto_def,
           spec_structures.Event:event_proto_def
-          }[type(command.response)](command.response)])
+          }[command.response.__class__](command.response)])
 
 def request_proto_def(request):
   return "\n".join([
       "message %s_%s_Request {" % (request.parent.parent.name, request.parent.name),
       "\n".join([ arg_proto_def(arg, idx+1) for (idx, arg) in enumerate(request.args) ]),
-      "}"])
-
-def response_proto_def(response):
-  return "\n".join([
-      "message %s_%s_Response {" % (response.parent.parent.name, response.parent.name),
-      "\n".join([ arg_proto_def(arg, idx+1) for (idx, arg) in enumerate(response.args) ]),
       "}"])
 
 def event_proto_def(event):
@@ -52,11 +46,17 @@ def event_proto_def(event):
       arg_proto_def(event.events, idx = 2),
       "}"])
 
+def response_proto_def(response):
+  return "\n".join([
+      "message %s_%s_Response {" % (response.parent.parent.name, response.parent.name),
+      "\n".join([ arg_proto_def(arg, idx+1) for (idx, arg) in enumerate(response.args) ]),
+      "}"])
+
 def arg_proto_def(arg, idx):
   return { spec_structures.Simple:simple_arg_proto_def,
       spec_structures.Repeat:repeat_arg_proto_def,
       spec_structures.Group:group_arg_proto_def,
-      spec_structures.Event:event_arg_proto_def}[type(arg)](arg, idx)
+      }[arg.__class__](arg, idx)
 
 def simple_arg_proto_def(arg, idx, modifier = "required"):
   if modifier == "repeated":
@@ -69,14 +69,14 @@ def repeat_arg_proto_def(repeat, idx):
       spec_structures.Simple:simple_arg_proto_def,
       spec_structures.Group:group_arg_proto_def,
       spec_structures.Select:select_arg_proto_def
-      }[type(repeat.arg)](repeat.arg, idx, "repeated")
+      }[repeat.arg.__class__](repeat.arg, idx, "repeated")
 
 def group_arg_proto_def(group, idx, modifier = "repeated"):
   return "\n".join([
       "message %s {" % group.name,
-      "\n".join([ arg_proto_def(arg, idx+1) for (idx, arg) in enumerate(group.args) ]),
+      "\n".join([ arg_proto_def(arg, idx2+1) for (idx2, arg) in enumerate(group.args) ]),
       "}",
-      pb_field(modifier, group.name, group.parent.name, idx)])
+      pb_field(modifier, group.name, group.parent.name, idx+1)])
 
 def event_arg_proto_def(arg, idx):
   return "EVENT"
@@ -84,16 +84,16 @@ def event_arg_proto_def(arg, idx):
 def select_arg_proto_def(select, idx, modifier = "repeated"):
   return "\n".join([
       "message %s {" % select.name,
-      simple_arg_proto_def(select.choice_arg, idx = 1),
-      "\n".join([ alt_arg_proto_def(alt, idx + 2) for (idx, alt) in enumerate(select.alts) ]),
+      simple_arg_proto_def(select.choice_arg, 1),
+      "\n".join([ alt_arg_proto_def(alt, idx2 + 2) for (idx2, alt) in enumerate(select.alts) ]),
       "}",
-      pb_field(modifier, select.name, select.parent.name, idx),
+      pb_field(modifier, select.name, select.parent.name, idx+1),
       ])
 
 def alt_arg_proto_def(alt, idx):
   return "\n".join([
       "message %s {" % alt.group_name,
-      "\n".join([ arg_proto_def(arg, idx+1) for (idx, arg) in enumerate(alt.args) ]),
+      "\n".join([ arg_proto_def(arg, idx2+1) for (idx2, arg) in enumerate(alt.args) ]),
       "}",
       pb_field("optional", alt.group_name, alt.name, idx)])
 
@@ -112,5 +112,5 @@ def rpc_for_name(service_name, name):
       service_name, name, service_name, name, service_name, name)
 
 def pb_field(modifier, field_type, name, number):
-    return "%s %s %s = %s;" % (
+    return "%s %s %s = %d;" % (
         modifier, field_type, name, number)

@@ -67,7 +67,7 @@ class Repeat:
     self.name = repeat[1]
     self.arg = create_arg_from_spec(self, repeat[2])
   def pack_fmt(self):
-    return "R(%s)" % self.arg.pack_fmt()
+    return "*(%s)" % self.arg.pack_fmt()
 
 class Group:
   def __init__(self, parent, group):
@@ -149,32 +149,32 @@ def get_alt_int_position(alt):
       return constant.value
   raise Exception("Unrecognized EventType constant: %s" % alt.position)
 
-SPECMAP_LINES = [ line.strip().split("\t") for line in \
-"""string	string	S
-boolean	bool	b
-byte	int32	B
-int	int32	I
-long	int64	L
-referenceType	int64	L
-referenceTypeID	int64	L
-threadObject	int64	L
-threadGroupObject	int64	L
-stringObject	int64	L
-object	int64	L
-classLoaderObject	int64	L
-field	int64	L
-method	int64	L
-value	Value	V
-interfaceType	int64	L
-classObject	int64	L
-tagged-object	TaggedObjectID	T
-classType	int64	L
-untagged-value	UntaggedValue	V
-arrayType	int64	L
-frame	int64	L
-location	Location	X
-arrayObject	int64	L
-typed-sequence	Value	A""".split("\n") ]
+SPECMAP_LINES = [ line.strip().split(":") for line in \
+"""string:string:S
+boolean:bool:b
+byte:int32:B
+int:int32:I
+long:int64:L
+referenceType:int64:R
+referenceTypeID:int64:R
+threadObject:int64:O
+threadGroupObject:int64:O
+stringObject:int64:O
+object:int64:O
+classLoaderObject:int64:O
+field:int64:F
+method:int64:M
+value:Value:V
+interfaceType:int64:R
+classObject:int64:R
+tagged-object:TaggedObjectID:T
+classType:int64:R
+untagged-value:UntaggedValue:U
+arrayType:int64:R
+frame:int64:f
+location:Location:X
+arrayObject:int64:L
+typed-sequence:Value:A""".split("\n") ]
 
 SPECMAP_PROTO_TYPES = dict([ (line[0], line[1]) for line in SPECMAP_LINES ])
 SPECMAP_STRUCT_FMTS = dict([ (line[0], line[2]) for line in SPECMAP_LINES ])

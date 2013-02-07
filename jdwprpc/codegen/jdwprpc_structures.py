@@ -73,7 +73,7 @@ def command_impl(cs, cmd):
       {
           spec_structures.Response:response_unpacking_impl,
           spec_structures.Event:event_unpacking_impl
-          }[type(cmd.response)](cs, cmd, cmd.response),
+          }[cmd.response.__class__](cs, cmd, cmd.response),
       "    done.run(response)",
       ])
 
@@ -111,7 +111,7 @@ def request_arg_packing_impl(data, cs, cmd, arg, idx):
   return {
       spec_structures.Simple:simple_request_arg_unpacking_impl,
       spec_structures.Repeat:repeat_request_arg_unpacking_impl,
-      }[type(arg)](data, cs, cmd, arg, idx)
+      }[arg.__class__](data, cs, cmd, arg, idx)
 
 def simple_request_arg_unpacking_impl(data, cs, cmd, arg, idx):
   return "    data.append(request.%s)" % arg.name
@@ -121,7 +121,7 @@ def repeat_request_arg_unpacking_impl(data, cs, cmd, arg, idx):
       spec_structures.Simple:simple_repeat_request_arg_unpacking_impl,
       spec_structures.Group:group_repeat_request_arg_unpacking_impl,
       spec_structures.Select:select_repeat_request_arg_unpacking_impl
-      }[type(arg.arg)](data, cs, cmd, arg, idx)
+      }[arg.arg.__class__](data, cs, cmd, arg, idx)
 
 def simple_repeat_request_arg_unpacking_impl(data, cs, cmd, arg, idx):
   return "\n".join([
@@ -153,7 +153,7 @@ def response_arg_unpacking_impl(data, cs, cmd, arg, idx):
   return {
       spec_structures.Simple:simple_response_arg_unpacking_impl,
       spec_structures.Repeat:repeat_response_arg_unpacking_impl,
-      }[type(arg)](data, cs, cmd, arg, idx)
+      }[arg.__class__](data, cs, cmd, arg, idx)
 
 def simple_response_arg_unpacking_impl(data, cs, cmd, arg, idx):
   return "    response.%s = %s" % (arg.name, data)
@@ -162,7 +162,7 @@ def repeat_response_arg_unpacking_impl(data, cs, cmd, arg, idx):
   return { spec_structures.Simple:simple_repeat_response_arg_unpacking_impl,
       spec_structures.Group:group_repeat_response_arg_unpacking_impl,
       spec_structures.Select:select_repeat_response_arg_unpacking_impl
-      }[type(arg.arg)](data, cs, cmd, arg, idx)
+      }[arg.arg.__class__](data, cs, cmd, arg, idx)
 
 def simple_repeat_response_arg_unpacking_impl(data, cs, cmd, arg, idx):
   return "\n".join([

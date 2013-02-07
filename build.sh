@@ -53,7 +53,7 @@ then
   rm -rf "$build_log_dir"
   rm -rf "$latest_build_out"
   rm -rf "$latest_build_err"
-  find . -name '*.pyc' | xargs rm
+  find . -name '*.pyc' | xargs rm -rf
   log 'All clean!'
   exit 0
 fi

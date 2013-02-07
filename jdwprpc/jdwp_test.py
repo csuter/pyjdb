@@ -18,7 +18,7 @@ class TestJdwpPackage(unittest.TestCase):
     time.sleep(1)
     # start up a jdwp connection
     self.jdwp = Jdwp(5005, self.event_callback)
-  
+
   def event_callback(self, request_id, event):
     return
 
@@ -84,7 +84,7 @@ class TestJdwpPackage(unittest.TestCase):
 
     # send vm resume to start things off
     self.jdwp.send_command_await_reply(1, 9)
-    
+
     time.sleep(.5)
 
     self.assertTrue(
@@ -136,7 +136,7 @@ class TestJdwpPackage(unittest.TestCase):
                  1,  # thread_id (get programmatically?)
                  (1, class_id, main_method_id, 0)]]]
 
-    # breakpoint should look as expected              
+    # breakpoint should look as expected
     self.assertEquals(breakpoint_event, expected_breakpoint_event)
 
 if __name__ == '__main__':

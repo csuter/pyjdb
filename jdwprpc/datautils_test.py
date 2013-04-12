@@ -3,7 +3,6 @@
 import datautils
 import unittest
 
-
 class TestDatautilsPackage(unittest.TestCase):
 
   def pack_and_unpack_test_helper(self, fmt, byte_array, python_obj):
@@ -94,7 +93,7 @@ class TestDatautilsPackage(unittest.TestCase):
 
   def test_pack_and_unpack_repeat(self):
     # repeat
-    fmt = "R(BI)"
+    fmt = "*(BI)"
     jdwp_bytes = [ 0x00, 0x00, 0x00, 0x02, # count
           0x01, 0x00, 0x00, 0x00, 0x07,
           0x05, 0x10, 0x00, 0x00, 0x00 ]
@@ -102,7 +101,7 @@ class TestDatautilsPackage(unittest.TestCase):
     self.pack_and_unpack_test_helper(fmt, jdwp_bytes, unpacked)
 
   def test_pack_and_unpack_repeat_with_empty(self):
-    fmt = "ILR(SB)"
+    fmt = "IL*(SB)"
     jdwp_bytes = [ 0x00, 0x00, 0x00, 0x01,  # I
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,  # L
         0x00, 0x00, 0x00, 0x00 ]  # empty repeat
@@ -135,7 +134,7 @@ class TestDatautilsPackage(unittest.TestCase):
     self.pack_and_unpack_test_helper(fmt, jdwp_bytes, unpacked)
 
     # select
-    fmt = "R(?B(1=IBB|2=L|3=X))"
+    fmt = "*(?B(1=IBB|2=L|3=X))"
     jdwp_bytes = [ 0x00, 0x00, 0x00, 0x03,  # count = 3
           # first select modifier = 1 (should be an IBB-type)
           0x01, 0x00, 0x00, 0x00, 0x20, 0x11, 0x12,
@@ -148,14 +147,14 @@ class TestDatautilsPackage(unittest.TestCase):
     unpacked = [[1, [32, 17, 18]], [2, [7]], [3, [(1, 1, 2, 3)]]]
     self.pack_and_unpack_test_helper(fmt, jdwp_bytes, unpacked)
 
-    fmt = "BBR(?B(5=S))"
+    fmt = "BB*(?B(5=S))"
     jdwp_bytes = [ 0x08, 0x02,  # BB
         0x00, 0x00, 0x00, 0x01,
         0x05, 0x00, 0x00, 0x00, 0x03, 0x61, 0x62, 0x63 ]
     unpacked = [8, 2, [5, [u'abc']]]
     self.pack_and_unpack_test_helper(fmt, jdwp_bytes, unpacked)
 
-    fmt = "BBR(?B(5=IBS))"
+    fmt = "BB*(?B(5=IBS))"
     jdwp_bytes = [ 0x08, 0x02,  # BB
         0x00, 0x00, 0x00, 0x01,
         0x05,  # ?B

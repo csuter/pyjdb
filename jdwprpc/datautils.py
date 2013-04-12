@@ -21,6 +21,8 @@ def compose_binary_functions(f1, f2):
   return lambda a, b : f2(*f1(a, b))
 
 def create_composite_from_parsed_fmt(parsed_fmt, getter):
+  if len(parsed_fmt) == 0:
+    return lambda a, b : (a, b)
   return lambda a, b : \
       reduce(compose_binary_functions, [ getter(x) for x in parsed_fmt ])(a, b)
 
@@ -109,7 +111,7 @@ def repeat_from_bytearray_base(subfmt, s):
   for i in range(count):
     (sub_result, sub) = unpacker([], sub)
     result.append(sub_result)
-  return result
+  return [result]
 
 def repeat_to_bytearray_base(subfmt, s):
   packer = create_composite_from_parsed_fmt(subfmt, get_packer)
@@ -173,10 +175,11 @@ def fmt_grammar():
   tagged_value = pp.Literal("V")
   tagged_object_id = pp.Literal("T")
   location = pp.Literal("X")
+  reference_type = pp.Literal("R")
   atomic = (string | int32 | boolean | byte | int64 | location |
-      tagged_object_id | tagged_value | array_region)
+      tagged_object_id | tagged_value | array_region | reference_type)
   fmt_type = pp.Forward()
-  repeat = pp.Group( pp.Literal("R") + open_paren + fmt_type + close_paren)
+  repeat = pp.Group( pp.Literal("*") + open_paren + fmt_type + close_paren)
   option = pp.Group(pp.Regex("[0-9]+") + pp.Literal("=").suppress() + fmt_type)
   or_symbol = pp.Literal("|").suppress()
   select = pp.Group(pp.Literal("?") + pp.Literal("B") +
@@ -187,11 +190,12 @@ def fmt_grammar():
 transform_specs = { 'I': fixed_length_transform_spec("I"),
                     'B': fixed_length_transform_spec("B"),
                     'L': fixed_length_transform_spec("Q"),
+                    'R': fixed_length_transform_spec("Q"),
                     'T': fixed_length_transform_spec("BQ"),
                     'X': fixed_length_transform_spec("BQQQ"),
                     'b': boolean,
                     'S': string,
-                    'R': transform_spec_from_base_functions(
+                    '*': transform_spec_from_base_functions(
                              repeat_to_bytearray_base,
                              repeat_from_bytearray_base,
                              repeat_restfunc_base),

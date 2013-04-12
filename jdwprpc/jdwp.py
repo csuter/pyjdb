@@ -1,33 +1,22 @@
-"""
-This package defines a single class for external use: Jdwp. Its constructor
-requires a valid local jvm debug port and an event callback. On instantiation,
-the Jdwp object connects to the target jvm, performs the obligatory handshake,
-and is then ready to send commands and receive data and events. It also starts
-a background thread, which reads and deserializes replies, errors, and events,
-forwarding these to the appropriate handler method on Jdwp.
-
-Author: Christopher Suter (cgs1019@gmail.com)
-"""
-
 import datautils
-import jdwprpc
+import jdwpspec
 import socket
 import struct
 import threading
 import time
 
 class Jdwp:
-  '''Provides a simple interface for interacting with a jdwp wire connection'''
-  def __init__(self, port, event_callback=None):
+  def __init__(self, jvm_port, event_callback=None):
     self.reqs_by_req_id = dict()
     self.replies_by_req_id = dict()
     self.events = []
     self.next_req_id = 1
     self.event_callback = event_callback
-
+    self.spec = jdwpspec.JdwpSpec()
+    # open socket to jvm
     self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    self.sock.connect(('localhost', port))
+    self.sock.connect(('localhost', jvm_port))
     # handshake
     handshake = b'JDWP-Handshake'
     self.sock.send(handshake)
@@ -35,44 +24,109 @@ class Jdwp:
     if data != handshake:
       self.sock.close()
       raise Exception('Handshake failed')
-
     self.reader_thread = ReaderThread(self)
+    self.cs_ids_by_name = dict([ (cs.name, cs.id) for cs in self.spec.command_sets ])
+    self.command_dicts_by_command_set_name = dict([
+        (cs.name, dict([(cmd.name, cmd) for cmd in cs.commands]))
+            for cs in self.spec.command_sets])
+    self.service_types = {}
+    self.__id_sizes = []
+    self.__id_sizes = self.VirtualMachine.IDSizes()
 
-  def send_command_await_reply(self, cmd_set_id, cmd_id, req_unpacked = []):
-    '''Defers to send_command_no_wait then returns the result of get_reply()'''
-    req_id = self.send_command_no_wait(cmd_set_id, cmd_id, req_unpacked)
+  def __getattr__(self, service):
+    if service not in self.cs_ids_by_name:
+      raise Exception("service %s unknown" % service)
+    class abstract_service(object):
+      def __init__(subself):
+        subself.methods = {}
+      def __getattr__(subself, method):
+        if method not in self.command_dicts_by_command_set_name[service]:
+          raise Exception("No method %s in service %s" % (method, service))
+        if method not in subself.methods:
+          subself.methods[method] = self.get_method(service, method)
+        return subself.methods[method]
+    if service not in self.service_types:
+      self.service_types[service] = \
+          type(service, (abstract_service,), {})()
+    return self.service_types[service]
+
+  def get_method(self, service, method):
+    return lambda *args : self.__command_request(service, method, args)
+
+  def __command_request(self, service, method, args):
+    cs_id = int(self.cs_ids_by_name[service])
+    commands = self.command_dicts_by_command_set_name[service]
+    command = commands[method]
+    cmd_id = int(command.id)
+    req_fmt = command.request.pack_fmt()
+    resp_fmt = command.response.pack_fmt()
+    req_bytes = datautils.to_bytestring(req_fmt, args)
+    resp_bytes = self.send_command_sync(cs_id, cmd_id, req_bytes)
+    resp_data = datautils.from_bytearray(resp_fmt, resp_bytes)
+    response_fields = self.__parse_response(command, resp_data)
+    return response_fields
+
+  def __parse_response(self, command, resp_data):
+    return self.__parse_response_for_args(command.response.args, resp_data)
+
+  def __parse_response_for_args(self, args, resp_data):
+    result = dict([{
+        jdwpspec.Simple: self.__parse_simple_response,
+        jdwpspec.Repeat: self.__parse_repeat_response,
+        }[arg.__class__](arg, resp) for (arg, resp) in zip(args, resp_data)])
+    return result
+
+  def __parse_simple_response(self, arg, simple_resp_data):
+    return (arg.name, simple_resp_data)
+
+  def __parse_repeat_response(self, arg, repeat_resp_data):
+    result = [{
+        jdwpspec.Simple: self.__parse_simple_response,
+        jdwpspec.Group: self.__parse_group_response,
+        }[arg.arg.__class__](arg.arg, data) for data in repeat_resp_data]
+    return [arg.name, result]
+
+  def __parse_group_response(self, arg, group_resp_data):
+    result = dict([{
+        jdwpspec.Simple: self.__parse_simple_response,
+        jdwpspec.Repeat: self.__parse_repeat_response,
+        }[arg.__class__](arg, resp) for (arg, resp) in
+            zip(arg.args, group_resp_data)])
+    return result
+
+  def send_command_sync(self, cmd_set_id, cmd_id, request_bytes):
+    req_id = self.send_command_async(cmd_set_id, cmd_id, request_bytes)
     return self.get_reply(req_id)
 
-  def send_command_no_wait(self, cmd_set_id, cmd_id, req_unpacked = []):
+  def send_command_async(self, cmd_set_id, cmd_id, request_bytes = []):
     '''Generate req_id, pack req data, and send cmd to jvm. Returns req_id'''
     req_id = self.generate_req_id()
-    self.reqs_by_req_id[req_id] = (cmd_set_id, cmd_id, req_unpacked)
-    fmt = jdwprpc.command_spec_request_fmt(cmd_set_id, cmd_id)
-    req_packed = datautils.to_bytestring(fmt, req_unpacked)
-    length = 11 + len(req_packed)
+    self.reqs_by_req_id[req_id] = (cmd_set_id, cmd_id, request_bytes)
+    length = 11 + len(request_bytes)
     header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
-    self.sock.send(header + req_packed)
+    self.sock.send(header + request_bytes)
     return req_id
 
   def get_reply(self, req_id):
     '''Blocks until a reply is received for 'req_id'; returns err, reply'''
     while req_id not in self.replies_by_req_id:
       time.sleep(.05)
-    return self.replies_by_req_id[req_id]
+    err, reply = self.replies_by_req_id[req_id]
+    if err != 0:
+      raise Exception("JDWP error: %s" % err)
+    return reply
 
   def disconnect(self):
     self.reader_thread.running = False
     self.sock.close();
 
-  # END EXTERNAL API; The following methods are for package-internal use only.
-
-  def report_event(self, req_id, event_unpacked):
-    self.events.append((req_id, event_unpacked))
+  def report_event(self, req_id, event_packed):
+    self.events.append((req_id, event_packed))
     if self.event_callback != None:
-      self.event_callback(req_id, event_unpacked)
+      self.event_callback(req_id, event_packed)
 
-  def report_reply(self, req_id, reply_unpacked):
-    self.replies_by_req_id[req_id] = (0, reply_unpacked)
+  def report_reply(self, req_id, reply_packed):
+    self.replies_by_req_id[req_id] = (0, reply_packed)
 
   def report_error(self, req_id, err):
     self.replies_by_req_id[req_id] = (err, [])
@@ -97,6 +151,17 @@ class Jdwp:
     self.next_req_id += 1
     return result
 
+  def spec_file_grammar(self, with_strings = False):
+    open_paren = pp.Literal("(").suppress()
+    close_paren = pp.Literal(")").suppress()
+    spec_string = pp.OneOrMore(pp.dblQuotedString)
+    if not with_strings:
+      spec_string = spec_string.suppress()
+    sexp = pp.Forward()
+    string = spec_string | pp.Regex("([^()\s])+")
+    sexp << ( string | pp.Group(open_paren + pp.ZeroOrMore(sexp) + close_paren) )
+    return pp.OneOrMore(sexp)
+
 EVENT_MAGIC_NUMBER = 0x4064
 class ReaderThread(threading.Thread):
   '''Listens for, parses replies/events; forwards results to Jdwp'''
@@ -110,20 +175,12 @@ class ReaderThread(threading.Thread):
   def run(self):
     while self.running:
       req_id, flags, err, reply_packed = self.jdwp.receive()
-      self.handle_reply(req_id, flags, err, reply_packed)
-
-  def handle_reply(self, req_id, flags, err, reply_packed):
-    if req_id == -1:
-      return
-    if err != EVENT_MAGIC_NUMBER and err != 0:
-      self.jdwp.report_error(req_id, err)
-      return
-    if err == EVENT_MAGIC_NUMBER: # this is actually an event message
-      cmd_set_id, cmd_id = 64, 100
-      report_function = self.jdwp.report_event
-    else:
-      cmd_set_id, cmd_id, _ = self.jdwp.reqs_by_req_id[req_id]
-      report_function = self.jdwp.report_reply
-    fmt = jdwprpc.command_spec_reply_fmt(cmd_set_id, cmd_id)
-    result = datautils.from_bytearray(fmt, reply_packed)
-    report_function(req_id, result)
+      if req_id == -1:
+        continue
+      if err != EVENT_MAGIC_NUMBER and err != 0:
+        self.jdwp.report_error(req_id, err)
+        continue
+      if err == EVENT_MAGIC_NUMBER: # this is actually an event message
+        self.jdwp.report_event(req_id, reply_packed)
+        continue
+      self.jdwp.report_reply(req_id, reply_packed)

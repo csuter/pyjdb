@@ -1,6 +1,6 @@
-""" Unit tests for datautils package"""
+""" Unit tests for pyjdb.internal.serialization package"""
 
-import datautils
+import pyjdb.internal.serialization
 import unittest
 
 class TestDatautilsPackage(unittest.TestCase):
@@ -11,14 +11,14 @@ class TestDatautilsPackage(unittest.TestCase):
 
   def unpack_test_helper(self, fmt, byte_array, expected_output):
     self.assertEquals(
-        datautils.from_bytearray(
+        pyjdb.internal.serialization.from_bytearray(
             fmt,
             ''.join([chr(x) for x in byte_array])),
         expected_output)
 
   def pack_test_helper(self, fmt, data, expected_list_of_bytes):
     self.assertEquals(
-        datautils.to_bytearray(
+        pyjdb.internal.serialization.to_bytearray(
             fmt,
             data),
         bytearray(expected_list_of_bytes))

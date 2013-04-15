@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# vimjdb main test script.
+# pyjdb main test script.
 #
 # running
 #  $ ./test.sh
@@ -28,10 +28,10 @@ echo ' test             \__| \__| |__/'
 # we don't mind if a test script fails.
 set +e
 
-for i in $(find jdwprpc -name "*_test.py" | grep jdwp_test)
+for i in $(find test -name "*_test.py")
 do
   cd "$dir" # ensure we're back where we started
-  PYTHONPATH="jdwprpc" python2 $i -v
+  PYTHONPATH="src" python2 $i -v
 done
 
 # cleanup any lingering java processes

@@ -1,4 +1,4 @@
-import jdwp
+import pyjdb.internal.jdwp
 import signal
 import string
 import subprocess
@@ -13,7 +13,7 @@ class TestJdwpPackage(unittest.TestCase):
         "-Xrunjdwp:transport=dt_socket,server=y,suspend=y,address=5005",
         "com.alltheburritos.vimjdb.test.TestProgram"])
     time.sleep(1)
-    self.jdwp = jdwp.Jdwp(5005)
+    self.jdwp = pyjdb.internal.jdwp.Jdwp(5005)
 
   def tearDown(self):
     # disconnect debugger

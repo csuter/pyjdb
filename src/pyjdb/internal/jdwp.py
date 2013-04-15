@@ -1,4 +1,4 @@
-import datautils
+import pyjdb.internal.serialization
 import jdwpspec
 import socket
 import struct
@@ -25,44 +25,70 @@ class Jdwp:
       self.sock.close()
       raise Exception('Handshake failed')
     self.reader_thread = ReaderThread(self)
-    self.cs_ids_by_name = dict([ (cs.name, cs.id) for cs in self.spec.command_sets ])
+    self.command_set_ids_by_name = dict([\
+        (command_set.name, command_set.id) for \
+        command_set in self.spec.command_sets ])
     self.command_dicts_by_command_set_name = dict([
-        (cs.name, dict([(cmd.name, cmd) for cmd in cs.commands]))
-            for cs in self.spec.command_sets])
+        (command_set.name, dict([(cmd.name, cmd) for \
+            cmd in command_set.commands]))
+            for command_set in self.spec.command_sets])
+    self.constant_dicts_by_constant_set_name = dict([
+        (constant_set.name, dict([(cmd.name, cmd) for \
+            cmd in constant_set.constants]))
+            for constant_set in self.spec.constant_sets])
     self.service_types = {}
+    self.constant_types = {}
     self.__id_sizes = []
     self.__id_sizes = self.VirtualMachine.IDSizes()
 
-  def __getattr__(self, service):
-    if service not in self.cs_ids_by_name:
-      raise Exception("service %s unknown" % service)
-    class abstract_service(object):
-      def __init__(subself):
-        subself.methods = {}
-      def __getattr__(subself, method):
-        if method not in self.command_dicts_by_command_set_name[service]:
-          raise Exception("No method %s in service %s" % (method, service))
-        if method not in subself.methods:
-          subself.methods[method] = self.get_method(service, method)
-        return subself.methods[method]
-    if service not in self.service_types:
-      self.service_types[service] = \
-          type(service, (abstract_service,), {})()
-    return self.service_types[service]
+  def __getattr__(self, attr):
+    if attr in self.command_set_ids_by_name:
+      class abstract_service(object):
+        def __init__(subself):
+          subself.methods = {}
+        def __getattr__(subself, method):
+          if method not in self.command_dicts_by_command_set_name[attr]:
+            raise Exception("No method %s in service %s" % (method, attr))
+          if method not in subself.methods:
+            subself.methods[method] = self.get_method(attr, method)
+          return subself.methods[method]
+      if attr not in self.service_types:
+        self.service_types[attr] = \
+            type(attr, (abstract_service,), {})()
+      return self.service_types[attr]
+    if attr in self.constant_dicts_by_constant_set_name:
+      class abstract_constant(object):
+        def __init__(subself):
+          subself.constants = {}
+        def __getattr__(subself, constant):
+          fullname = "%s_%s" % (attr, constant)
+          if fullname not in \
+              self.constant_dicts_by_constant_set_name[attr]:
+            raise Exception("No constant %s in constant set %s" % (constant,
+              attr))
+          if constant not in subself.constants:
+            subself.constants[constant] = \
+                self.constant_dicts_by_constant_set_name[attr][fullname].value
+          return subself.constants[constant]
+      if attr not in self.constant_types:
+        self.constant_types[attr] = \
+            type(attr, (abstract_constant,), {})()
+      return self.constant_types[attr]
+    raise Exception("service/constant %s unknown" % attr)
 
   def get_method(self, service, method):
     return lambda *args : self.__command_request(service, method, args)
 
   def __command_request(self, service, method, args):
-    cs_id = int(self.cs_ids_by_name[service])
+    command_set_id = int(self.command_set_ids_by_name[service])
     commands = self.command_dicts_by_command_set_name[service]
     command = commands[method]
     cmd_id = int(command.id)
     req_fmt = command.request.pack_fmt()
     resp_fmt = command.response.pack_fmt()
-    req_bytes = datautils.to_bytestring(req_fmt, args)
-    resp_bytes = self.send_command_sync(cs_id, cmd_id, req_bytes)
-    resp_data = datautils.from_bytearray(resp_fmt, resp_bytes)
+    req_bytes = pyjdb.internal.serialization.to_bytestring(req_fmt, args)
+    resp_bytes = self.send_command_sync(command_set_id, cmd_id, req_bytes)
+    resp_data = pyjdb.internal.serialization.from_bytearray(resp_fmt, resp_bytes)
     response_fields = self.__parse_response(command, resp_data)
     return response_fields
 

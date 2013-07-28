@@ -1,5 +1,19 @@
+from pyjdb.internal import jdwptypesizes
 import pyparsing as pp
 import struct
+
+def SerializeRequest(out_descriptor, id_sizes, request):
+  return ''
+
+def DeserializeReply(reply_descriptor, id_sizes, response_bytes):
+  result = {}
+  response_byte_position = 0
+  for jdwp_type, field_name in reply_descriptor:
+    if jdwp_type not in jdwptypesizes.JdwpTypes():
+      continue
+    size = jdwptypesizes.JdwpTypeSize(jdwp_type, id_sizes)
+    result[field_name] = response_bytes[response_byte_position:response_byte_position + size]
+  return result
 
 def to_bytestring(fmt, source):
   return ''.join([
@@ -33,24 +47,20 @@ def get_transform_spec(fmt_spec):
     return transform_specs[fmt_spec[0]](fmt_spec[1:])
 
 def get_unpacker(fmt_spec):
-  return general_unpacker(get_transform_spec(fmt_spec))
+  transform_spec = get_transform_spec(fmt_spec)
+  return general_transform(
+      transform_spec['from_bytearray'],
+      transform_spec['restfunc'])
 
 def get_packer(fmt_spec):
-  return general_packer(get_transform_spec(fmt_spec))
+  return general_transform(
+      get_transform_spec(fmt_spec)['to_bytearray'])
 
 rest = lambda s : s[1:]
 
 def general_transform(to_or_from, restfunc=rest):
   return lambda output, source : \
       (output + to_or_from(source), restfunc(source))
-
-def general_packer(transform_spec):
-  return general_transform(transform_spec['to_bytearray'])
-
-def general_unpacker(transform_spec):
-  return general_transform(
-      transform_spec['from_bytearray'],
-      transform_spec['restfunc'])
 
 def string_from_bytearray(source):
   strlen = struct.unpack(">I", source[0:4])[0]
@@ -68,7 +78,6 @@ string = {
         struct.pack(">I", len(s[0])) + bytearray(s[0], "UTF-8"),
     'from_bytearray' : string_from_bytearray,
     'restfunc' : lambda s : s[4+struct.unpack(">I", s[0:4])[0]:] }
-
 
 struct_pack_fmt_sizes = { 'I': 4,
                           'B': 1,
@@ -162,44 +171,3 @@ def select_to_bytearray_base(subfmt, s):
   sub_packer = create_composite_from_parsed_fmt(sub_packer_fmt, get_packer)
   (sub_output, sub_structure) = sub_packer(bytearray(), s[1])
   return decider_output + sub_output
-
-def fmt_grammar():
-  open_paren = pp.Literal("(").suppress()
-  close_paren = pp.Literal(")").suppress()
-  string = pp.Literal("S")
-  int32 = pp.Literal("I")
-  boolean = pp.Literal("b")
-  byte = pp.Literal("B")
-  int64 = pp.Literal("L")
-  array_region = pp.Literal("A")
-  tagged_value = pp.Literal("V")
-  tagged_object_id = pp.Literal("T")
-  location = pp.Literal("X")
-  reference_type = pp.Literal("R")
-  atomic = (string | int32 | boolean | byte | int64 | location |
-      tagged_object_id | tagged_value | array_region | reference_type)
-  fmt_type = pp.Forward()
-  repeat = pp.Group( pp.Literal("*") + open_paren + fmt_type + close_paren)
-  option = pp.Group(pp.Regex("[0-9]+") + pp.Literal("=").suppress() + fmt_type)
-  or_symbol = pp.Literal("|").suppress()
-  select = pp.Group(pp.Literal("?") + pp.Literal("B") +
-      open_paren + option + pp.ZeroOrMore(or_symbol + option) + close_paren)
-  fmt_type << pp.ZeroOrMore(atomic | repeat | select)
-  return fmt_type
-
-transform_specs = { 'I': fixed_length_transform_spec("I"),
-                    'B': fixed_length_transform_spec("B"),
-                    'L': fixed_length_transform_spec("Q"),
-                    'R': fixed_length_transform_spec("Q"),
-                    'T': fixed_length_transform_spec("BQ"),
-                    'X': fixed_length_transform_spec("BQQQ"),
-                    'b': boolean,
-                    'S': string,
-                    '*': transform_spec_from_base_functions(
-                             repeat_to_bytearray_base,
-                             repeat_from_bytearray_base,
-                             repeat_restfunc_base),
-                    '?': transform_spec_from_base_functions(
-                             select_to_bytearray_base,
-                             select_from_bytearray_base,
-                             select_restfunc_base) }

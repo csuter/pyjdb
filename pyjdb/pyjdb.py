@@ -1,8 +1,691 @@
-#!/usr/bin/env python
-"""jdwpspectext.py: Exports RAW_JDWP_TEXT, which contains the full spec"""
+import pyparsing as pp
+import re
+import socket
+import struct
+import threading
+import time
 
-RAW_JDWP_TEXT =\
-'''(CommandSet VirtualMachine=1
+class Error(Exception):
+    pass
+
+class Jdwp(object):
+    def __init__(self, host="localhost", jvm_port=5005):
+	self.__jdwp_connection = JdwpConnection(host, jvm_port)
+	self.__jdwp_spec = JdwpSpec()
+	self.is_initialized = false
+
+    def Initialize():
+	self.__jdwp_connection.Initialize()
+	self.is_initialized = true
+
+    class __AbstractService(object):
+	def __init(self, parent):
+	    self.__parent = parent
+	    self.__methods = {}
+
+	def __getattr__(self, method):
+	    if method not in self.__methods:
+		def Method(*args):
+		    return parent.__CommandRequest(service, method, args)
+		self.__methods[method] = Method
+
+    class AbstractConstant(object):
+	def __init__(self, parent):
+	    self.__parent = parent
+	    self.constants = {}
+	def __getattr__(self, constant):
+	    fullname = "%s_%s" % (attr, constant)
+	    if fullname not in self.__parent.constant_dicts_by_constant_set_name[attr]:
+		raise Error("No constant %s in set %s" % (constant, attr))
+	    if constant not in self.constants:
+		self.constants[constant] = \
+                        self.__parent.constant_dicts_by_constant_set_name[attr][fullname].value
+	    return self.constants[constant]
+
+    def __getattr__(self, attr):
+	if attr in self.__jdwp_spec.commands:
+	    if attr not in self.service_types:
+		self.service_types[attr] = type(
+			attr, (AbstractService,), {})(self)
+	    return self.service_types[attr]
+        if attr in self.constant_dicts_by_constant_set_name:
+              if attr not in self.constant_types:
+        self.constant_types[attr] = type(
+		attr, (AbstractConstant,), {})()
+      return self.constant_types[attr]
+    raise Error("service/constant %s unknown" % attr)
+
+
+class OldJdwp:
+  def __init__(self, host="localhost", jvm_port=5005, event_callback=None):
+    self.reqs_by_req_id = dict()
+    self.replies_by_req_id = dict()
+    self.events = []
+    self.next_req_id = 1
+    self.event_callback = event_callback
+    self.spec = JdwpSpec()
+    self.host = host
+    self.jvm_port = jvm_port
+    self.command_set_ids_by_name = dict([\
+        (command_set.name, command_set.id) for \
+        command_set in self.spec.command_sets ])
+    self.command_dicts_by_command_set_name = dict([
+        (command_set.name, dict([(cmd.name, cmd) for \
+            cmd in command_set.commands]))
+            for command_set in self.spec.command_sets])
+    self.constant_dicts_by_constant_set_name = dict([
+        (constant_set.name, dict([(cmd.name, cmd) for \
+            cmd in constant_set.constants]))
+            for constant_set in self.spec.constant_sets])
+    self.service_types = {}
+    self.constant_types = {}
+    self.id_sizes = []
+
+  def Initialize(self):
+    # open socket to jvm
+    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    self.sock.connect(('localhost', self.jvm_port))
+    # handshake
+    handshake = b'JDWP-Handshake'
+    self.sock.send(handshake)
+    data = self.sock.recv(len(handshake))
+    if data != handshake:
+      self.sock.close()
+      raise Error('Handshake failed')
+    self.reader_thread = ReaderThread(self)
+    self.id_sizes = self.VirtualMachine.IDSizes()
+
+  def Disconnect(self):
+    self.reader_thread.running = False
+    self.sock.close();
+
+  def __getattr__(self, attr):
+    if attr in self.command_set_ids_by_name:
+      class abstract_service(object):
+        def __init__(subself):
+          subself.methods = {}
+        def __getattr__(subself, method):
+          if method not in self.command_dicts_by_command_set_name[attr]:
+            raise Error("No method %s in service %s" % (method, attr))
+          if method not in subself.methods:
+            subself.methods[method] = lambda *args : (
+		    self.__CommandRequest(service, method, args))
+          return subself.methods[method]
+      if attr not in self.service_types:
+        self.service_types[attr] = type(
+		attr, (abstract_service,), {})()
+      return self.service_types[attr]
+    if attr in self.constant_dicts_by_constant_set_name:
+      class abstract_constant(object):
+        def __init__(subself):
+          subself.constants = {}
+        def __getattr__(subself, constant):
+          fullname = "%s_%s" % (attr, constant)
+          if fullname not in \
+              self.constant_dicts_by_constant_set_name[attr]:
+            raise Error("No constant %s in constant set %s" % (constant,
+              attr))
+          if constant not in subself.constants:
+            subself.constants[constant] = \
+                self.constant_dicts_by_constant_set_name[attr][fullname].value
+          return subself.constants[constant]
+      if attr not in self.constant_types:
+        self.constant_types[attr] = \
+            type(attr, (abstract_constant,), {})()
+      return self.constant_types[attr]
+    raise Error("service/constant %s unknown" % attr)
+
+  def __CommandRequest(self, service, method, args):
+    command_set_id = int(self.command_set_ids_by_name[service])
+    commands = self.command_dicts_by_command_set_name[service]
+    command = commands[method]
+    cmd_id = int(command.id)
+    req_fmt = command.request.pack_fmt()
+    resp_fmt = command.response.pack_fmt()
+    req_bytes = to_bytestring(req_fmt, args)
+    resp_bytes = self.__SendCommandSync(command_set_id, cmd_id, req_bytes)
+    resp_data = from_bytearray(resp_fmt, resp_bytes)
+    response_fields = self.__ParseResponse(command, resp_data)
+    return response_fields
+
+  def __ParseResponse(self, command, resp_data):
+    result = dict([{
+        Simple: self.__ParseSimpleResponse,
+        Repeat: self.__ParseRepeatResponse,
+        }[arg.__class__](arg, resp) for (arg, resp) in \
+        zip(command.response.args, resp_data)])
+    return result
+
+  def __ParseSimpleResponse(self, arg, simple_resp_data):
+    return (arg.name, simple_resp_data)
+
+  def __ParseRepeatResponse(self, arg, repeat_resp_data):
+    result = [{
+        Simple: self.__ParseSimpleResponse,
+        Group: self.__ParseGroupResponse,
+        }[arg.arg.__class__](arg.arg, data) for data in repeat_resp_data]
+    return [arg.name, result]
+
+  def __ParseGroupResponse(self, arg, group_resp_data):
+    result = dict([{
+        Simple: self.__ParseSimpleResponse,
+        Repeat: self.__ParseRepeatResponse,
+        }[arg.__class__](arg, resp) for (arg, resp) in
+            zip(arg.args, group_resp_data)])
+    return result
+
+  def __SendCommandSync(self, cmd_set_id, cmd_id, request_bytes):
+    req_id = self.__SendCommandAsync(cmd_set_id, cmd_id, request_bytes)
+    return self.__GetReply(req_id)
+
+  def __SendCommandAsync(self, cmd_set_id, cmd_id, request_bytes = []):
+    '''Generate req_id, pack req data, and send cmd to jvm. Returns req_id'''
+    req_id = self.__GenerateReqId()
+    self.reqs_by_req_id[req_id] = (cmd_set_id, cmd_id, request_bytes)
+    length = 11 + len(request_bytes)
+    header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
+    self.sock.send(header + request_bytes)
+    return req_id
+
+  def __GetReply(self, req_id):
+    '''Blocks until a reply is received for 'req_id'; returns err, reply'''
+    while req_id not in self.replies_by_req_id:
+      time.sleep(.05)
+    err, reply = self.replies_by_req_id[req_id]
+    if err != 0:
+      raise Error("JDWP error: %s" % err)
+    return reply
+
+  def ReportEvent(self, req_id, event_packed):
+    self.events.append((req_id, event_packed))
+    if self.event_callback != None:
+      self.event_callback(req_id, event_packed)
+
+  def ReportReply(self, req_id, reply_packed):
+    self.replies_by_req_id[req_id] = (0, reply_packed)
+
+  def ReportError(self, req_id, err):
+    self.replies_by_req_id[req_id] = (err, [])
+
+  def Receive(self):
+    '''Reads header, flags, error code, and subsequent data from jdwp socket'''
+    header = self.sock.recv(11);
+    if len(header) == 0:
+      return -1, 0, 0, ''
+    length, req_id, flags, err = struct.unpack('>IIBH', header)
+    remaining = length - 11
+    msg = bytearray()
+    while remaining > 0:
+      chunk = self.sock.recv(min(remaining, 4096))
+      msg.extend(chunk)
+      remaining -= len(chunk)
+    reply_packed = ''.join([chr(x) for x in msg])
+    return req_id, flags, err, reply_packed
+
+  def __GenerateReqId(self):
+    result = self.next_req_id
+    self.next_req_id += 1
+    return result
+
+EVENT_MAGIC_NUMBER = 0x4064
+class ReaderThread(threading.Thread):
+  '''Listens for, parses replies/events; forwards results to Jdwp'''
+  def __init__(self, jdwp):
+    super(ReaderThread, self).__init__(name="jdwp_reader")
+    self.jdwp = jdwp
+    self.setDaemon(True)
+    self.running = True
+    self.start()
+
+  def run(self):
+    while self.running:
+      req_id, flags, err, reply_packed = self.jdwp.Receive()
+      if req_id == -1:
+        continue
+      if err != EVENT_MAGIC_NUMBER and err != 0:
+        self.jdwp.ReportError(req_id, err)
+        continue
+      if err == EVENT_MAGIC_NUMBER: # this is actually an event message
+        self.jdwp.ReportEvent(req_id, reply_packed)
+        continue
+      self.jdwp.ReportReply(req_id, reply_packed)
+
+class JdwpSpec:
+  def __init__(self):
+    self.parent = None
+    spec = self.__ConstructFromText(RAW_JDWP_TEXT())
+    self.constant_sets = [
+        ConstantSet(self, entry) for entry in spec if entry[0] == 'ConstantSet']
+    self.command_sets = [
+        CommandSet(self, entry) for entry in spec if entry[0] == 'CommandSet']
+
+  def __ConstructFromText(self, text):
+    # cleanup space around equal signs
+    clean_spec_text = re.sub("\s*=\s*", "=", text)
+    parsed_jdwp_spec = GRAMMAR_JDWP_SPEC.parseString(clean_spec_text)
+    return parsed_jdwp_spec
+
+class ConstantSet:
+  def __init__(self, parent, constant_set):
+    self.parent = parent
+    self.name = constant_set[1]
+    self.constants = [ Constant(self, c) for c in constant_set[2:] ]
+
+class CommandSet:
+  def __init__(self, parent, command_set):
+    self.parent = parent
+    [self.name, self.id] = command_set[1].split("=")
+    self.commands = [ Command(self, c) for c in command_set[2:] ]
+
+class Constant:
+  def __init__(self, parent, constant):
+    self.parent = parent
+    [name, self.value] = constant[1].split("=")
+    self.name = "%s_%s" % (parent.name, name)
+
+class Command:
+  def __init__(self, parent, command):
+    self.parent = parent
+    [self.name, self.id] = command[1].split("=")
+    if command[2][0] == 'Event':
+      self.request = Request(self, [])
+      self.response = create_arg_from_spec(self, command[2])
+      self.errors = []
+    else:
+      self.request = Request(self, command[2])
+      self.response = Response(self, command[3])
+      self.errors = [ ErrorRef(self, error) for error in command[4] ]
+
+class Request:
+  def __init__(self, parent, request):
+    self.parent = parent
+    self.args = [ create_arg_from_spec(parent, arg) for arg in request[1:] ]
+  def pack_fmt(self):
+    return "".join([ arg.pack_fmt() for arg in self.args ])
+
+class Response:
+  def __init__(self, parent, response):
+    self.parent = parent
+    self.args = [ create_arg_from_spec(parent, arg) for arg in response[1:] ]
+  def pack_fmt(self):
+    return "".join([ arg.pack_fmt() for arg in self.args ])
+
+class Simple:
+  def __init__(self, parent, simple):
+    self.parent = parent
+    self.type = simple[0]
+    self.name = simple[1]
+  def pack_fmt(self):
+    return SPECMAP_STRUCT_FMTS[self.type]
+
+class Repeat:
+  def __init__(self, parent, repeat):
+    self.parent = parent
+    self.name = repeat[1]
+    self.arg = create_arg_from_spec(self, repeat[2])
+  def pack_fmt(self):
+    return "*(%s)" % self.arg.pack_fmt()
+
+class Group:
+  def __init__(self, parent, group):
+    self.parent = parent
+    self.name = group[1]
+    self.args = [ create_arg_from_spec(self, arg) for arg in group[2:] ]
+  def pack_fmt(self):
+    return "".join([ arg.pack_fmt() for arg in self.args ])
+
+class Select:
+  def __init__(self, parent, select):
+    self.parent = parent
+    self.name = select[1]
+    self.choice_arg = create_arg_from_spec(self, select[2])
+    self.alts = [ Alt(self, alt) for alt in select[3:] ]
+  def pack_fmt(self):
+    return "?%s(%s)" % (
+        self.choice_arg.pack_fmt(),
+        "|".join([ alt.pack_fmt() for alt in self.alts ]))
+
+class Alt:
+  def __init__(self, parent, alt):
+    self.parent = parent
+    [self.name, self.position] = alt[1].split("=")
+    if not re.match("[0-9]+", self.position):
+      self.position = get_alt_int_position(self)
+    self.group_name = "%s_%s" % (parent.name, self.name)
+    self.args = [ create_arg_from_spec(parent, arg) for arg in alt[2:] ]
+  def pack_fmt(self):
+    return "%s=%s" % (
+        self.position,
+        "".join([ arg.pack_fmt() for arg in self.args ]))
+
+class Event:
+  def __init__(self, parent, event):
+    self.parent = parent
+    self.suspend_policy = create_arg_from_spec(parent, event[1])
+    self.events= create_arg_from_spec(parent, event[2])
+  def pack_fmt(self):
+    return "".join([
+        self.suspend_policy.pack_fmt(),
+        self.events.pack_fmt()
+        ])
+
+class ErrorRef:
+  def __init__(self, parent, error):
+    self.parent = parent
+    self.name = error[1]
+
+def create_arg_from_spec(parent, arg):
+  arg_type = arg[0]
+  try:
+    return {
+      'Repeat':Repeat,
+      'Group':Group,
+      'Event':Event,
+      'Select':Select}[arg_type](parent, arg)
+  except KeyError:
+    return Simple(parent, arg)
+
+def get_alt_int_position(alt):
+  # a hack ensues. replace with something better.
+  spec = alt.parent
+  # find the spec (its parent_ is None)
+  while spec.parent != None:
+    spec = spec.parent
+  # find the "EventKind" constant set. Complain if not exists.
+  constants = None
+  for constant_set in spec.constant_sets:
+    if constant_set.name == "EventKind":
+      constants = constant_set.constants
+      break
+  if constants == None:
+    raise Error("No EventKind constant set")
+  # position looks like "JDWP.EventKind.BREAKPOINT", e.g.
+  val = alt.position.split(".")[2]
+  for constant in constants:
+    if constant.name[len("EventKind_"):] == val:
+      return constant.value
+  raise Error("Unrecognized EventType constant: %s" % alt.position)
+
+def to_bytestring(fmt, source):
+  return ''.join([
+    chr(x) for x in to_bytearray(fmt, source) ])
+
+def to_bytearray(fmt, source):
+  return transform(fmt, source, bytearray(), get_packer)[0]
+
+def from_bytearray(fmt, source):
+  return transform(fmt, source, [], get_unpacker)[0]
+
+def transform(fmt, source, initial, getter):
+  if fmt == "":
+    return (initial, [])
+  parsed_fmt = FmtGrammar().parseString(fmt)
+  return create_composite_from_parsed_fmt(parsed_fmt, getter)(initial, source)
+
+def compose_binary_functions(f1, f2):
+  return lambda a, b : f2(*f1(a, b))
+
+def create_composite_from_parsed_fmt(parsed_fmt, getter):
+  if len(parsed_fmt) == 0:
+    return lambda a, b : (a, b)
+  return lambda a, b : \
+      reduce(compose_binary_functions, [ getter(x) for x in parsed_fmt ])(a, b)
+
+def get_transform_spec(fmt_spec):
+  if fmt_spec in transform_specs:
+    return transform_specs[fmt_spec]
+  else:
+    return transform_specs[fmt_spec[0]](fmt_spec[1:])
+
+def get_unpacker(fmt_spec):
+  return lambda output, source : \
+      (output + get_transform_spec(fmt_spec)['from_bytearray'](source),
+       get_transform_spec(fmt_spec)['restfunc'](source))
+
+def get_packer(fmt_spec):
+  return lambda output, source : \
+      (output + get_transform_spec(fmt_spec)['to_bytearray'](source),
+       source[1:])
+
+def string_from_bytearray(source):
+  strlen = struct.unpack(">I", source[0:4])[0]
+  fmtstr = str(strlen) + "s"
+  string_subarray = source[4:4 + strlen]
+  return [struct.unpack(fmtstr, string_subarray)[0].decode("UTF-8")]
+
+boolean = {
+    'to_bytearray' : lambda s : bytearray(struct.pack(">B", s[0])),
+    'from_bytearray' : lambda s : [struct.unpack(">B", s[0:1])[0] != 0],
+    'restfunc' : lambda s : s[1:] }
+
+string = {
+    'to_bytearray' : lambda s : \
+        struct.pack(">I", len(s[0])) + bytearray(s[0], "UTF-8"),
+    'from_bytearray' : string_from_bytearray,
+    'restfunc' : lambda s : s[4+struct.unpack(">I", s[0:4])[0]:] }
+
+
+struct_pack_fmt_sizes = { 'I': 4,
+                          'B': 1,
+                          'Q': 8 }
+
+def fixed_length_transform_spec(fmtstr):
+  length = sum([struct_pack_fmt_sizes[c] for c in fmtstr])
+  if len(fmtstr) == 1:
+    return {
+        'to_bytearray' : lambda s : \
+            bytearray(struct.pack(">" + fmtstr, s[0])),
+        'from_bytearray' :
+            lambda s : list(struct.unpack(">" + fmtstr, s[0:length])),
+        'restfunc' : lambda s : s[length:]
+        }
+  return {
+      'to_bytearray' : lambda s : bytearray(struct.pack(">" + fmtstr, *s[0])),
+      'from_bytearray' :
+          lambda s : [struct.unpack(">" + fmtstr, s[0:length])],
+      'restfunc' : lambda s : s[length:]
+      }
+
+def transform_spec_from_base_functions(to_bytearray_base,
+                                       from_bytearray_base,
+                                       restfunc_base):
+  return lambda subfmt : {
+      'to_bytearray' :
+          lambda s : to_bytearray_base(subfmt, s),
+      'from_bytearray' :
+          lambda s : from_bytearray_base(subfmt, s),
+      'restfunc' :
+          lambda s : restfunc_base(subfmt, s),
+      }
+
+def repeat_from_bytearray_base(subfmt, s):
+  unpacker = create_composite_from_parsed_fmt(subfmt, get_unpacker)
+  count = struct.unpack(">I", s[0:4])[0]
+  result = []
+  sub = s[4:]
+  for i in range(count):
+    (sub_result, sub) = unpacker([], sub)
+    result.append(sub_result)
+  return [result]
+
+def repeat_to_bytearray_base(subfmt, s):
+  packer = create_composite_from_parsed_fmt(subfmt, get_packer)
+  result = bytearray(struct.pack(">I", len(s)))
+  if len(s) == 0:
+    return result
+  for entry in s:
+    result += packer(bytearray(), entry)[0]
+  return result
+
+def repeat_restfunc_base(subfmt, s):
+  unpacker = create_composite_from_parsed_fmt(subfmt, get_unpacker)
+  count = struct.unpack(">I", s[0:4])[0]
+  sub = s[4:]
+  for i in range(count):
+    sub = unpacker([], sub)[1]
+  return sub
+
+def select_subfmt_to_dict(subfmt):
+  return dict(map(lambda x : (x[0], x[1:]), subfmt[1:]))
+
+def select_from_bytearray_base(subfmt, s):
+  return select_parse_base(subfmt, s)[0]
+
+def select_restfunc_base(subfmt, s):
+  return select_parse_base(subfmt, s)[1] 
+
+def select_parse_base(subfmt, s):
+  # unpack decider
+  decider_unpacker = create_composite_from_parsed_fmt(subfmt[0:1], get_unpacker)
+  (decider_output, decider_source) = decider_unpacker([], s)
+  decision = decider_output[0]
+  # get subfmt and pack sub message
+  sub_unpacker_fmt = select_subfmt_to_dict(subfmt)[str(decision)]
+  sub_unpacker = \
+      create_composite_from_parsed_fmt(sub_unpacker_fmt, get_unpacker)
+  (sub_output, sub_source) = sub_unpacker([], decider_source)
+  # return outputs
+  return [decision, sub_output], sub_source
+
+def select_to_bytearray_base(subfmt, s):
+  # pack decider
+  decider_packer = create_composite_from_parsed_fmt(subfmt[0:1], get_packer)
+  decision = s[0]
+  decider_output = decider_packer(bytearray(), [decision])[0]
+  # get subfmt and pack sub message
+  sub_packer_fmt =  select_subfmt_to_dict(subfmt)[str(decision)]
+  sub_packer = create_composite_from_parsed_fmt(sub_packer_fmt, get_packer)
+  (sub_output, sub_structure) = sub_packer(bytearray(), s[1])
+  return decider_output + sub_output
+
+def FmtGrammar():
+  open_paren = pp.Literal("(").suppress()
+  close_paren = pp.Literal(")").suppress()
+  string = pp.Literal("S")
+  int32 = pp.Literal("I")
+  boolean = pp.Literal("b")
+  byte = pp.Literal("B")
+  int64 = pp.Literal("L")
+  array_region = pp.Literal("A")
+  tagged_value = pp.Literal("V")
+  tagged_object_id = pp.Literal("T")
+  location = pp.Literal("X")
+  reference_type = pp.Literal("R")
+  atomic = (string | int32 | boolean | byte | int64 | location |
+      tagged_object_id | tagged_value | array_region | reference_type)
+  fmt_type = pp.Forward()
+  repeat = pp.Group( pp.Literal("*") + open_paren + fmt_type + close_paren)
+  option = pp.Group(pp.Regex("[0-9]+") + pp.Literal("=").suppress() + fmt_type)
+  or_symbol = pp.Literal("|").suppress()
+  select = pp.Group(pp.Literal("?") + pp.Literal("B") +
+      open_paren + option + pp.ZeroOrMore(or_symbol + option) + close_paren)
+  fmt_type << pp.ZeroOrMore(atomic | repeat | select)
+  return fmt_type
+
+transform_specs = { 'I': fixed_length_transform_spec("I"),
+                    'B': fixed_length_transform_spec("B"),
+                    'L': fixed_length_transform_spec("Q"),
+                    'R': fixed_length_transform_spec("Q"),
+                    'T': fixed_length_transform_spec("BQ"),
+                    'X': fixed_length_transform_spec("BQQQ"),
+                    'b': boolean,
+                    'S': string,
+                    '*': transform_spec_from_base_functions(
+                             repeat_to_bytearray_base,
+                             repeat_from_bytearray_base,
+                             repeat_restfunc_base),
+                    '?': transform_spec_from_base_functions(
+                             select_to_bytearray_base,
+                             select_from_bytearray_base,
+                             select_restfunc_base) }
+
+SPEC_GRAMMAR_OPEN_PAREN = pp.Literal("(").suppress()
+SPEC_GRAMMAR_CLOSE_PAREN = pp.Literal(")").suppress()
+SPEC_GRAMMAR_QUOTED_STRING = pp.dblQuotedString
+SPEC_GRAMMAR_QUOTED_STRING = SPEC_GRAMMAR_QUOTED_STRING.suppress()
+SPEC_GRAMMAR_SPEC_STRING = pp.OneOrMore(SPEC_GRAMMAR_QUOTED_STRING)
+SPEC_GRAMMAR_S_EXP = pp.Forward()
+SPEC_GRAMMAR_STRING = SPEC_GRAMMAR_SPEC_STRING | pp.Regex("([^()\s])+")
+SPEC_GRAMMAR_S_EXP_LIST = pp.Group(SPEC_GRAMMAR_OPEN_PAREN +
+    pp.ZeroOrMore(SPEC_GRAMMAR_S_EXP) + SPEC_GRAMMAR_CLOSE_PAREN)
+SPEC_GRAMMAR_S_EXP << ( SPEC_GRAMMAR_STRING | SPEC_GRAMMAR_S_EXP_LIST )
+GRAMMAR_JDWP_SPEC = pp.OneOrMore(SPEC_GRAMMAR_S_EXP)
+
+SPECMAP_STRUCT_FMTS = dict([
+    ("string", "S"),
+    ("boolean", "b"),
+    ("byte", "B"),
+    ("int", "I"),
+    ("long", "L"),
+    ("referenceType", "R"),
+    ("referenceTypeID", "R"),
+    ("threadObject", "O"),
+    ("threadGroupObject", "O"),
+    ("stringObject", "O"),
+    ("object", "O"),
+    ("classLoaderObject", "O"),
+    ("field", "F"),
+    ("method", "M"),
+    ("value", "V"),
+    ("interfaceType", "R"),
+    ("classObject", "R"),
+    ("tagged-object", "T"),
+    ("classType", "R"),
+    ("untagged-value", "U"),
+    ("arrayType", "R"),
+    ("frame", "f"),
+    ("location", "X"),
+    ("arrayObject", "L"),
+    ("typed-sequence", "A") ])
+
+SIZE_LOOKUPS_BY_TYPE_NAME = {
+    "byte":	lambda id_sizes: 1,
+    "boolean":	lambda id_sizes: 1,
+    "int":	lambda id_sizes: 4,
+    "long":	lambda id_sizes: 8,
+    "objectID":	lambda id_sizes: id_sizes['objectIDSize'],
+    "tagged-objectID":	lambda id_sizes: 1 + id_sizes['objectIDSize'],
+    "threadID":	lambda id_sizes: id_sizes['objectIDSize'],
+    "threadGroupID":	lambda id_sizes: id_sizes['objectIDSize'],
+    "stringID":	lambda id_sizes: id_sizes['objectIDSize'],
+    "classLoaderID":	lambda id_sizes: id_sizes['objectIDSize'],
+    "classObjectID":	lambda id_sizes: id_sizes['objectIDSize'],
+    "arrayID":	lambda id_sizes: id_sizes['objectIDSize'],
+    "referenceTypeID":	lambda id_sizes: id_sizes[referenceTypeIDSize],
+    "classID":	lambda id_sizes: id_sizes[referenceTypeIDSize],
+    "interfaceID":	lambda id_sizes: id_sizes[referenceTypeIDSize],
+    "arrayTypeID":	lambda id_sizes: id_sizes[referenceTypeIDSize],
+    "methodID":	lambda id_sizes: id_sizes['methodIDSize'],
+    "fieldID":	lambda id_sizes: id_sizes['fieldIDSize'],
+    "frameID":	lambda id_sizes: id_sizes['frameIDSize'] }
+
+def TYPE_SIZES():
+  return '''
+byte	1
+boolean	1
+int	4
+long	8
+objectID	id_sizes['objectIDSize']
+tagged-objectID	1+id_sizes['objectIDSize']
+threadID	id_sizes['objectIDSize']
+threadGroupID	id_sizes['objectIDSize']
+stringID	id_sizes['objectIDSize']
+classLoaderID	id_sizes['objectIDSize']
+classObjectID	id_sizes['objectIDSize']
+arrayID	id_sizes['objectIDSize']
+referenceTypeID	id_sizes['referenceTypeIDSize']
+classID	id_sizes['referenceTypeIDSize']
+interfaceID	id_sizes['referenceTypeIDSize']
+arrayTypeID	id_sizes['referenceTypeIDSize']
+methodID	id_sizes['methodIDSize']
+fieldID	id_sizes['fieldIDSize']
+frameID	id_sizes['frameIDSize']'''
+
+# This is the actual spec text. Where else should we put it?
+def RAW_JDWP_TEXT():
+  return '''
+(CommandSet VirtualMachine=1
     (Command Version=1 
         "Returns the JDWP version implemented by the target VM. "
 	"The version string format is implementation dependent. "
@@ -3102,4 +3785,5 @@ RAW_JDWP_TEXT =\
         "otherwise, all threads started. ")
     (Constant INVOKE_NONVIRTUAL = 0x02
         "otherwise, normal virtual invoke (instance methods only)")
-)'''
+)
+'''

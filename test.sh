@@ -11,16 +11,14 @@
 dir=$(dirname "$0")
 dir=$(cd "$dir" && pwd)
 
-echo '\    / | |\    /|    o    | |   '
-echo ' \  /  | | \  / |    |  __| |__ '
-echo '  \/   | |  \/  |    | /  | |  \'
-echo ' test             \__| \__| |__/'
+echo ' ___'
+echo '|   \ \   /   o    | |   '
+echo '|___/  \ /    |  __| |__ '
+echo '|       /     | /  | |  \'
+echo '| test /   \__| \__| |__/'
 
 # we don't mind if a test script fails.
 set +e
 
-for i in $(find test -name "*_test.py")
-do
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="src" python2 $i -v
-  cd "$dir" # ensure we're back where we started
-done
+cd "$dir" # ensure we're back where we started
+PYTHONPATH="." python2 pyjdb/pyjdb_test.py -v

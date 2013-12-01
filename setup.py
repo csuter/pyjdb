@@ -7,10 +7,9 @@ distutils.core.setup(
     url = "github.com/cgs1019/pyjdb",
     download_url = "",
     package_dir = {
-        'pyjdb': 'src/pyjdb',
+        'pyjdb': 'pyjdb',
     },
     packages = [ \
         'pyjdb',
-        'pyjdb.internal'
     ],
 )

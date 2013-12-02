@@ -21,4 +21,12 @@ echo '| test /   \__| \__| |__/'
 set +e
 
 cd "$dir" # ensure we're back where we started
-PYTHONPATH="." python2 pyjdb/pyjdb_test.py -v
+PYTHONPATH="." python pyjdb/pyjdb_test.py -v
+
+find . -name '*.pyc' | xargs rm
+ps aux \
+  | grep java \
+  | grep -v grep \
+  | grep 'fib\.jar' \
+  | awk '{print $2}' \
+  | xargs -n1 kill -9

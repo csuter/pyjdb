@@ -8,597 +8,454 @@ import time
 class Error(Exception):
     pass
 
-class Jdwp(object):
-    def __init__(self, host="localhost", jvm_port=5005):
-	self.__jdwp_connection = JdwpConnection(host, jvm_port)
-	self.__jdwp_spec = JdwpSpec()
-	self.is_initialized = false
-
-    def Initialize():
-	self.__jdwp_connection.Initialize()
-	self.is_initialized = true
-
-    class __AbstractService(object):
-	def __init(self, parent):
-	    self.__parent = parent
-	    self.__methods = {}
-
-	def __getattr__(self, method):
-	    if method not in self.__methods:
-		def Method(*args):
-		    return parent.__CommandRequest(service, method, args)
-		self.__methods[method] = Method
-
-    class AbstractConstant(object):
-	def __init__(self, parent):
-	    self.__parent = parent
-	    self.constants = {}
-	def __getattr__(self, constant):
-	    fullname = "%s_%s" % (attr, constant)
-	    if fullname not in self.__parent.constant_dicts_by_constant_set_name[attr]:
-		raise Error("No constant %s in set %s" % (constant, attr))
-	    if constant not in self.constants:
-		self.constants[constant] = \
-                        self.__parent.constant_dicts_by_constant_set_name[attr][fullname].value
-	    return self.constants[constant]
-
-    def __getattr__(self, attr):
-	if attr in self.__jdwp_spec.commands:
-	    if attr not in self.service_types:
-		self.service_types[attr] = type(
-			attr, (AbstractService,), {})(self)
-	    return self.service_types[attr]
-        if attr in self.constant_dicts_by_constant_set_name:
-              if attr not in self.constant_types:
-        self.constant_types[attr] = type(
-		attr, (AbstractConstant,), {})()
-      return self.constant_types[attr]
-    raise Error("service/constant %s unknown" % attr)
-
-
-class OldJdwp:
-  def __init__(self, host="localhost", jvm_port=5005, event_callback=None):
-    self.reqs_by_req_id = dict()
-    self.replies_by_req_id = dict()
-    self.events = []
-    self.next_req_id = 1
-    self.event_callback = event_callback
-    self.spec = JdwpSpec()
-    self.host = host
-    self.jvm_port = jvm_port
-    self.command_set_ids_by_name = dict([\
-        (command_set.name, command_set.id) for \
-        command_set in self.spec.command_sets ])
-    self.command_dicts_by_command_set_name = dict([
-        (command_set.name, dict([(cmd.name, cmd) for \
-            cmd in command_set.commands]))
-            for command_set in self.spec.command_sets])
-    self.constant_dicts_by_constant_set_name = dict([
-        (constant_set.name, dict([(cmd.name, cmd) for \
-            cmd in constant_set.constants]))
-            for constant_set in self.spec.constant_sets])
-    self.service_types = {}
-    self.constant_types = {}
-    self.id_sizes = []
-
-  def Initialize(self):
-    # open socket to jvm
-    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    self.sock.connect(('localhost', self.jvm_port))
-    # handshake
-    handshake = b'JDWP-Handshake'
-    self.sock.send(handshake)
-    data = self.sock.recv(len(handshake))
-    if data != handshake:
-      self.sock.close()
-      raise Error('Handshake failed')
-    self.reader_thread = ReaderThread(self)
-    self.id_sizes = self.VirtualMachine.IDSizes()
-
-  def Disconnect(self):
-    self.reader_thread.running = False
-    self.sock.close();
-
-  def __getattr__(self, attr):
-    if attr in self.command_set_ids_by_name:
-      class abstract_service(object):
-        def __init__(subself):
-          subself.methods = {}
-        def __getattr__(subself, method):
-          if method not in self.command_dicts_by_command_set_name[attr]:
-            raise Error("No method %s in service %s" % (method, attr))
-          if method not in subself.methods:
-            subself.methods[method] = lambda *args : (
-		    self.__CommandRequest(service, method, args))
-          return subself.methods[method]
-      if attr not in self.service_types:
-        self.service_types[attr] = type(
-		attr, (abstract_service,), {})()
-      return self.service_types[attr]
-    if attr in self.constant_dicts_by_constant_set_name:
-      class abstract_constant(object):
-        def __init__(subself):
-          subself.constants = {}
-        def __getattr__(subself, constant):
-          fullname = "%s_%s" % (attr, constant)
-          if fullname not in \
-              self.constant_dicts_by_constant_set_name[attr]:
-            raise Error("No constant %s in constant set %s" % (constant,
-              attr))
-          if constant not in subself.constants:
-            subself.constants[constant] = \
-                self.constant_dicts_by_constant_set_name[attr][fullname].value
-          return subself.constants[constant]
-      if attr not in self.constant_types:
-        self.constant_types[attr] = \
-            type(attr, (abstract_constant,), {})()
-      return self.constant_types[attr]
-    raise Error("service/constant %s unknown" % attr)
-
-  def __CommandRequest(self, service, method, args):
-    command_set_id = int(self.command_set_ids_by_name[service])
-    commands = self.command_dicts_by_command_set_name[service]
-    command = commands[method]
-    cmd_id = int(command.id)
-    req_fmt = command.request.pack_fmt()
-    resp_fmt = command.response.pack_fmt()
-    req_bytes = to_bytestring(req_fmt, args)
-    resp_bytes = self.__SendCommandSync(command_set_id, cmd_id, req_bytes)
-    resp_data = from_bytearray(resp_fmt, resp_bytes)
-    response_fields = self.__ParseResponse(command, resp_data)
-    return response_fields
-
-  def __ParseResponse(self, command, resp_data):
-    result = dict([{
-        Simple: self.__ParseSimpleResponse,
-        Repeat: self.__ParseRepeatResponse,
-        }[arg.__class__](arg, resp) for (arg, resp) in \
-        zip(command.response.args, resp_data)])
-    return result
-
-  def __ParseSimpleResponse(self, arg, simple_resp_data):
-    return (arg.name, simple_resp_data)
-
-  def __ParseRepeatResponse(self, arg, repeat_resp_data):
-    result = [{
-        Simple: self.__ParseSimpleResponse,
-        Group: self.__ParseGroupResponse,
-        }[arg.arg.__class__](arg.arg, data) for data in repeat_resp_data]
-    return [arg.name, result]
-
-  def __ParseGroupResponse(self, arg, group_resp_data):
-    result = dict([{
-        Simple: self.__ParseSimpleResponse,
-        Repeat: self.__ParseRepeatResponse,
-        }[arg.__class__](arg, resp) for (arg, resp) in
-            zip(arg.args, group_resp_data)])
-    return result
-
-  def __SendCommandSync(self, cmd_set_id, cmd_id, request_bytes):
-    req_id = self.__SendCommandAsync(cmd_set_id, cmd_id, request_bytes)
-    return self.__GetReply(req_id)
-
-  def __SendCommandAsync(self, cmd_set_id, cmd_id, request_bytes = []):
-    '''Generate req_id, pack req data, and send cmd to jvm. Returns req_id'''
-    req_id = self.__GenerateReqId()
-    self.reqs_by_req_id[req_id] = (cmd_set_id, cmd_id, request_bytes)
-    length = 11 + len(request_bytes)
-    header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
-    self.sock.send(header + request_bytes)
-    return req_id
-
-  def __GetReply(self, req_id):
-    '''Blocks until a reply is received for 'req_id'; returns err, reply'''
-    while req_id not in self.replies_by_req_id:
-      time.sleep(.05)
-    err, reply = self.replies_by_req_id[req_id]
-    if err != 0:
-      raise Error("JDWP error: %s" % err)
-    return reply
-
-  def ReportEvent(self, req_id, event_packed):
-    self.events.append((req_id, event_packed))
-    if self.event_callback != None:
-      self.event_callback(req_id, event_packed)
-
-  def ReportReply(self, req_id, reply_packed):
-    self.replies_by_req_id[req_id] = (0, reply_packed)
-
-  def ReportError(self, req_id, err):
-    self.replies_by_req_id[req_id] = (err, [])
-
-  def Receive(self):
-    '''Reads header, flags, error code, and subsequent data from jdwp socket'''
-    header = self.sock.recv(11);
-    if len(header) == 0:
-      return -1, 0, 0, ''
-    length, req_id, flags, err = struct.unpack('>IIBH', header)
-    remaining = length - 11
-    msg = bytearray()
-    while remaining > 0:
-      chunk = self.sock.recv(min(remaining, 4096))
-      msg.extend(chunk)
-      remaining -= len(chunk)
-    reply_packed = ''.join([chr(x) for x in msg])
-    return req_id, flags, err, reply_packed
-
-  def __GenerateReqId(self):
-    result = self.next_req_id
-    self.next_req_id += 1
-    return result
 
 EVENT_MAGIC_NUMBER = 0x4064
-class ReaderThread(threading.Thread):
-  '''Listens for, parses replies/events; forwards results to Jdwp'''
-  def __init__(self, jdwp):
-    super(ReaderThread, self).__init__(name="jdwp_reader")
-    self.jdwp = jdwp
-    self.setDaemon(True)
-    self.running = True
-    self.start()
 
-  def run(self):
-    while self.running:
-      req_id, flags, err, reply_packed = self.jdwp.Receive()
-      if req_id == -1:
-        continue
-      if err != EVENT_MAGIC_NUMBER and err != 0:
-        self.jdwp.ReportError(req_id, err)
-        continue
-      if err == EVENT_MAGIC_NUMBER: # this is actually an event message
-        self.jdwp.ReportEvent(req_id, reply_packed)
-        continue
-      self.jdwp.ReportReply(req_id, reply_packed)
+
+def debug_string(obj):
+    from pprint import pprint
+    pprint(vars(obj))
+
+class Jdwp(object):
+    def __init__(self, host="localhost", jvm_port=5005, event_cb=None):
+	self.__jdwp_spec = JdwpSpec()
+	self.__jdwp_connection = JdwpConnection(
+                host, jvm_port, self.__jdwp_spec, event_cb)
+
+    def initialize(self):
+        for command_set_name in self.__jdwp_spec.command_sets:
+            command_set = self.__jdwp_spec.command_sets[command_set_name]
+            setattr(self, command_set_name, GenericService(
+                    self.__jdwp_connection, command_set))
+        for constant_set_name in self.__jdwp_spec.constant_sets:
+            constant_set = self.__jdwp_spec.constant_sets[constant_set_name]
+            setattr(self, constant_set_name, GenericConstantSet(constant_set))
+	self.__jdwp_connection.initialize()
+        self.__jdwp_spec.id_sizes = self.VirtualMachine.IDSizes()
+
+    def disconnect(self):
+        self.__jdwp_connection.disconnect()
+
+
+class GenericService(object):
+    def __init__(self, jdwp_connection, command_set):
+        self.__conn = jdwp_connection
+        self.__command_set = command_set
+        for cmd_name in self.__command_set.commands:
+            def create_lambda(name):
+                return lambda data={}: self.__conn.command_request(
+                        self.__command_set.name, name, data)
+            setattr(self, cmd_name, create_lambda(cmd_name))
+
+class GenericConstantSet(object):
+    def __init__(self, constant_set):
+        for constant_name in constant_set.constants:
+            constant = constant_set.constants[constant_name]
+            setattr(self, constant_name, constant.value)
+
+class JdwpConnection(object):
+    def __init__(self, host, port, jdwp_spec, event_cb):
+        self.__host = host
+        self.__port = port
+        self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.__jdwp_spec = jdwp_spec
+        self.__next_req_id = 1
+        self.__replies_by_req_id = {}
+        self.__event_cb = event_cb
+
+    def initialize(self):
+        # open socket to jvm
+        self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.__socket.connect(('localhost', self.__port))
+        # handshake
+        handshake = b'JDWP-Handshake'
+        self.__socket.send(handshake)
+        data = self.__socket.recv(len(handshake))
+        if data != handshake:
+            self.__socket.close()
+            raise Error('Handshake failed')
+
+        vm_start_event_header = self.__socket.recv(11);
+        length, _, _, _ = struct.unpack('>IIBH', vm_start_event_header)
+        vm_start_event_data = self.__socket.recv(length - 11);
+        remainder_fmt = { 1: "B",
+                4: "I",
+                8: "Q" }[length - 11 - 10]
+        _, _, event_kind, _, _ = struct.unpack('>BIBI' + remainder_fmt, vm_start_event_data)
+        if event_kind != 90:  # vm_start
+            raise Error("I...i don't know")
+
+        self.__socket.send(struct.pack(">IIBBB", 11, 0, 0, 1, 7))
+        id_sizes_response_data = self.__socket.recv(31);
+        id_sizes_response = struct.unpack('>IIBHIIIII', id_sizes_response_data)
+        self.id_sizes = id_sizes_response[4:]
+        self.__reader_thread = JdwpReaderThread(self)
+
+
+    def disconnect(self):
+        self.__reader_thread.running = False
+        self.__socket.close();
+
+    def command_request(self, service_name, command_name, data):
+        command = self.__jdwp_spec.lookup_command(service_name, command_name)
+        req_bytes = command.encode(data)
+        resp_bytes = self.__send_command_sync(
+                command.command_set_id, command.id, req_bytes)
+        return command.decode(resp_bytes)
+
+    def __send_command_sync(self, cmd_set_id, cmd_id, request_bytes):
+        '''Synchronous wrapper around a call to __send_command_async'''
+        req_id = self.__send_command_async(cmd_set_id, cmd_id, request_bytes)
+        return self.__get_reply(req_id)
+
+    def __send_command_async(self, cmd_set_id, cmd_id, request_bytes = []):
+        '''Generate req_id, pack req data, and send cmd to jvm. Returns req_id'''
+        req_id = self.__generate_req_id()
+        length = 11 + len(request_bytes)
+        header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
+        self.__socket.send(header + request_bytes)
+        return req_id
+
+    def __get_reply(self, req_id):
+        '''Blocks until a reply is received for 'req_id'; returns err, reply'''
+        while req_id not in self.__replies_by_req_id:
+            time.sleep(.05)
+        err, reply = self.__replies_by_req_id[req_id]
+        if err != 0:
+            raise Error("JDWP error: %s" % err)
+        return reply
+
+    def handle_event(self, req_id, event_packed):
+        if self.__event_cb:
+            command = self.__jdwp_spec.lookup_command("Event", "Composite")
+            self.__event_cb(req_id, command.decode(event_packed))
+
+    def handle_reply(self, req_id, reply_packed):
+        self.__replies_by_req_id[req_id] = (0, reply_packed)
+
+    def handle_error(self, req_id, err):
+        self.__replies_by_req_id[req_id] = (err, [])
+
+    def receive(self):
+        '''Reads header, flags, error code, and subsequent data from jdwp socket'''
+        header = self.__socket.recv(11);
+        if len(header) == 0:
+            return -1, 0, 0, ''
+        length, req_id, flags, err = struct.unpack('>IIBH', header)
+        remaining = length - 11
+        msg = bytearray()
+        while remaining > 0:
+            chunk = self.__socket.recv(min(remaining, 4096))
+            msg.extend(chunk)
+            remaining -= len(chunk)
+        reply_packed = ''.join([chr(x) for x in msg])
+        return req_id, flags, err, reply_packed
+
+    def __generate_req_id(self):
+        result = self.__next_req_id
+        self.__next_req_id += 1
+        return result
+
+class JdwpReaderThread(threading.Thread):
+    '''Listens for, parses replies/events; forwards results to Jdwp'''
+    def __init__(self, conn):
+        super(JdwpReaderThread, self).__init__(name="jdwp_reader")
+        self.conn = conn
+        self.setDaemon(True)
+        self.running = True
+        self.start()
+
+    def run(self):
+        while self.running:
+            req_id, flags, err, reply_packed = self.conn.receive()
+            if req_id == -1:
+                continue
+            if err != EVENT_MAGIC_NUMBER and err != 0:
+                self.conn.handle_error(req_id, err)
+                continue
+            if err == EVENT_MAGIC_NUMBER: # this is actually an event message
+                self.conn.handle_event(req_id, reply_packed)
+                continue
+            self.conn.handle_reply(req_id, reply_packed)
+
 
 class JdwpSpec:
-  def __init__(self):
-    self.parent = None
-    spec = self.__ConstructFromText(RAW_JDWP_TEXT())
-    self.constant_sets = [
-        ConstantSet(self, entry) for entry in spec if entry[0] == 'ConstantSet']
-    self.command_sets = [
-        CommandSet(self, entry) for entry in spec if entry[0] == 'CommandSet']
+    def __init__(self):
+        self.__clean_spec_text = re.sub("\s*=\s*", "=", RAW_JDWP_TEXT())
+        self.__spec = GRAMMAR_JDWP_SPEC.parseString(self.__clean_spec_text)
+        self.command_sets = {}
+        self.constant_sets = {}
+        self.id_sizes = {}
+        for entry in self.__spec:
+            if entry[0] == 'ConstantSet':
+                constant_set = ConstantSet(entry)
+                self.constant_sets[constant_set.name] = constant_set
+        for entry in self.__spec:
+            if entry[0] == 'CommandSet':
+                command_set = CommandSet(self, entry)
+                self.command_sets[command_set.name] = command_set
 
-  def __ConstructFromText(self, text):
-    # cleanup space around equal signs
-    clean_spec_text = re.sub("\s*=\s*", "=", text)
-    parsed_jdwp_spec = GRAMMAR_JDWP_SPEC.parseString(clean_spec_text)
-    return parsed_jdwp_spec
+    def lookup_command(self, command_set_name, command_name):
+        if command_set_name not in self.command_sets:
+            raise Error("Unknown command set: %s" % command_set_name)
+        command_set = self.command_sets[command_set_name]
+        if command_name not in command_set.commands:
+            raise Error("Unknown command: %s, %s" % (
+                    command_set_name, command_name))
+        return command_set.commands[command_name]
+
+    def lookup_constant(self, constant_set_name, constant_name):
+        if constant_set_name not in self.constant_sets:
+            raise Error("Unknown constant set: %s" % constant_set_name)
+        constant_set = self.constant_sets[constant_set_name]
+        if constant_name not in constant_set.constants:
+            raise Error("Unknown constant: %s, %s" % (
+                    constant_set_name, constant_name))
+        return constant_set.constants[constant_name]
+
+    def lookup_id_size(self, type_name):
+        lookup_fns_by_type = {
+            "byte":	lambda id_sizes: 1,
+            "boolean":	lambda id_sizes: 1,
+            "int":	lambda id_sizes: 4,
+            "long":	lambda id_sizes: 8,
+            "objectID":	lambda id_sizes: id_sizes['objectIDSize'],
+            "tagged-objectID":	lambda id_sizes: 1 + id_sizes['objectIDSize'],
+            "threadID":	lambda id_sizes: id_sizes['objectIDSize'],
+            "threadObject":	lambda id_sizes: id_sizes['objectIDSize'],
+            "threadGroupID":	lambda id_sizes: id_sizes['objectIDSize'],
+            "stringID":	lambda id_sizes: id_sizes['objectIDSize'],
+            "classLoaderID":	lambda id_sizes: id_sizes['objectIDSize'],
+            "classObjectID":	lambda id_sizes: id_sizes['objectIDSize'],
+            "arrayID":	lambda id_sizes: id_sizes['objectIDSize'],
+            "referenceTypeID":	lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "classID":	lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "interfaceID":	lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "arrayTypeID":	lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "methodID":	lambda id_sizes: id_sizes['methodIDSize'],
+            "fieldID":	lambda id_sizes: id_sizes['fieldIDSize'],
+            "frameID":	lambda id_sizes: id_sizes['frameIDSize'] }
+        return lookup_fns_by_type[type_name](self.id_sizes)
+
 
 class ConstantSet:
-  def __init__(self, parent, constant_set):
-    self.parent = parent
-    self.name = constant_set[1]
-    self.constants = [ Constant(self, c) for c in constant_set[2:] ]
+    def __init__(self, constant_set):
+        self.name = constant_set[1]
+        self.constants = {}
+        for constant_entry in constant_set[2:]:
+            constant = Constant(constant_entry)
+            self.constants[constant.name] = constant
 
-class CommandSet:
-  def __init__(self, parent, command_set):
-    self.parent = parent
-    [self.name, self.id] = command_set[1].split("=")
-    self.commands = [ Command(self, c) for c in command_set[2:] ]
 
 class Constant:
-  def __init__(self, parent, constant):
-    self.parent = parent
-    [name, self.value] = constant[1].split("=")
-    self.name = "%s_%s" % (parent.name, name)
+    def __init__(self, constant):
+        [self.name, value_str] = constant[1].split("=")
+        if value_str.startswith("0x"):
+            self.value = int(value_str, 16)
+        else:
+            try:
+                self.value = int(value_str)
+            except ValueError:
+                self.value = value_str
+
+
+class CommandSet:
+    def __init__(self, spec, command_set):
+        self.spec = spec
+        [self.name, self.id] = command_set[1].split("=")
+        self.id = int(self.id)
+        self.commands = {}
+        for command_entry in command_set[2:]:
+            command = Command(spec, self.id, command_entry)
+            self.commands[command.name] = command
+
 
 class Command:
-  def __init__(self, parent, command):
-    self.parent = parent
-    [self.name, self.id] = command[1].split("=")
-    if command[2][0] == 'Event':
-      self.request = Request(self, [])
-      self.response = create_arg_from_spec(self, command[2])
-      self.errors = []
-    else:
-      self.request = Request(self, command[2])
-      self.response = Response(self, command[3])
-      self.errors = [ ErrorRef(self, error) for error in command[4] ]
+    def __init__(self, spec, command_set_id, command):
+        self.spec = spec
+        self.command_set_id = command_set_id
+        [self.name, self.id] = command[1].split("=")
+        self.id = int(self.id)
+        if command[2][0] == 'Event':
+            self.request = Request(spec, [])
+            self.response = Response(spec, command[2])
+            self.errors = []
+        else:
+            self.request = Request(spec, command[2])
+            self.response = Response(spec, command[3])
+            self.errors = [ ErrorRef(spec, error) for error in command[4] ]
+
+    def encode(self, data):
+        return self.request.encode(data)
+
+    def decode(self, data):
+        return self.response.decode(data)
+
 
 class Request:
-  def __init__(self, parent, request):
-    self.parent = parent
-    self.args = [ create_arg_from_spec(parent, arg) for arg in request[1:] ]
-  def pack_fmt(self):
-    return "".join([ arg.pack_fmt() for arg in self.args ])
+    def __init__(self, spec, request):
+        self.spec = spec
+        self.args = [ create_arg_from_spec(spec, arg) for arg in request[1:] ]
+
+    def encode(self, data):
+        result = bytearray()
+        for arg in self.args:
+            data, result = arg.encode(data, result)
+        return result
+
 
 class Response:
-  def __init__(self, parent, response):
-    self.parent = parent
-    self.args = [ create_arg_from_spec(parent, arg) for arg in response[1:] ]
-  def pack_fmt(self):
-    return "".join([ arg.pack_fmt() for arg in self.args ])
+    def __init__(self, spec, response):
+        self.spec = spec
+        self.args = [ create_arg_from_spec(spec, arg) for arg in response[1:] ]
+
+    def decode(self, data):
+        result = {}
+        for arg in self.args:
+            data, result = arg.decode(data, result)
+        return result
+
 
 class Simple:
-  def __init__(self, parent, simple):
-    self.parent = parent
-    self.type = simple[0]
-    self.name = simple[1]
-  def pack_fmt(self):
-    return SPECMAP_STRUCT_FMTS[self.type]
+    def __init__(self, spec, simple):
+        self.spec = spec
+        self.type = simple[0]
+        self.name = simple[1]
+
+    def decode(self, data, accum={}):
+        if self.type == 'string':
+            strlen = struct.unpack(">I", data[0:4])[0]
+            fmt = str(strlen) + "s"
+            subdata = data[4:4 + strlen]
+            string_value = struct.unpack(fmt, subdata)[0].decode("UTF-8")
+            accum[self.name] = string_value
+            return data[4+strlen:], accum
+        elif self.type == 'binary':
+            accum[self.name] = (struct.unpack("B", data[0])[0] != 0)
+            return data[1:], accum
+        else:
+            size = self.spec.lookup_id_size(self.type)
+            fmt = { 1: "B",
+                    4: "I",
+                    8: "Q" }[size]
+            accum[self.name] = struct.unpack(">" + fmt, data[0:size])[0]
+            return data[size:], accum
+
+    def encode(self, data, accum):
+        value = data[self.name]
+        if self.type == 'string':
+            strlen = len(value)
+            fmt = str(strlen) + "s"
+            accum += struct.pack(">I", len(s[0]))
+            accum += bytearray(s[0], "UTF-8")
+        elif self.type == 'binary':
+            accum += bytearray(struct.pack(">B", int(value)))
+        else:
+            size = self.spec.lookup_id_size(self.type)
+            fmt = { 1: "B",
+                    4: "I",
+                    8: "Q" }[size]
+            accum += struct.pack(">" + fmt, value)
+        del data[self.name]
+        return data, accum
+
 
 class Repeat:
-  def __init__(self, parent, repeat):
-    self.parent = parent
-    self.name = repeat[1]
-    self.arg = create_arg_from_spec(self, repeat[2])
-  def pack_fmt(self):
-    return "*(%s)" % self.arg.pack_fmt()
+    def __init__(self, spec, repeat):
+        self.spec = spec
+        self.name = repeat[1]
+        self.arg = create_arg_from_spec(spec, repeat[2])
+
+    def decode(self, data, accum={}):
+        count = struct.unpack(">I", data[0:4])[0]
+        accum[self.name] = []
+        data = data[4:]
+        for i in range(count):
+            (data, subaccum) = self.arg.decode(data, {})
+            accum[self.name].append(subaccum[self.arg.name])
+        return data, accum
+
+    def encode(self, data, accum):
+        values = data[self.name]
+        accum += struct.pack(">B", len(values))
+        for value in values:
+            (_, subaccum) = self.arg.encode({self.name: value}, bytearray())
+            accum += subaccum
+        del data[self.name]
+        return data, accum
 
 class Group:
-  def __init__(self, parent, group):
-    self.parent = parent
-    self.name = group[1]
-    self.args = [ create_arg_from_spec(self, arg) for arg in group[2:] ]
-  def pack_fmt(self):
-    return "".join([ arg.pack_fmt() for arg in self.args ])
+    def __init__(self, spec, group):
+        self.spec = spec
+        self.name = group[1]
+        self.args = [ create_arg_from_spec(spec, arg) for arg in group[2:] ]
+
+    def decode(self, data, accum={}):
+        result = {}
+        for arg in self.args:
+            (data, result) = arg.decode(data, result)
+        accum[self.name] = result
+        return data, accum
+
 
 class Select:
-  def __init__(self, parent, select):
-    self.parent = parent
-    self.name = select[1]
-    self.choice_arg = create_arg_from_spec(self, select[2])
-    self.alts = [ Alt(self, alt) for alt in select[3:] ]
-  def pack_fmt(self):
-    return "?%s(%s)" % (
-        self.choice_arg.pack_fmt(),
-        "|".join([ alt.pack_fmt() for alt in self.alts ]))
+    def __init__(self, spec, select):
+        self.spec = spec
+        self.name = select[1]
+        self.choice_arg = create_arg_from_spec(spec, select[2])
+        self.alts = {}
+        for alt_spec in select[3:]:
+            alt = Alt(spec, alt_spec)
+            self.alts[alt.position] = alt
+
+    def decode(self, data, accum={}):
+        # pop the choice byte off the top
+        data, result = self.choice_arg.decode(data)
+        choice = result[self.choice_arg.name]
+        alt = self.alts[choice]
+        data, result = alt.decode(data, result)
+        accum[self.name] = result
+        return data, accum
+
 
 class Alt:
-  def __init__(self, parent, alt):
-    self.parent = parent
-    [self.name, self.position] = alt[1].split("=")
-    if not re.match("[0-9]+", self.position):
-      self.position = get_alt_int_position(self)
-    self.group_name = "%s_%s" % (parent.name, self.name)
-    self.args = [ create_arg_from_spec(parent, arg) for arg in alt[2:] ]
-  def pack_fmt(self):
-    return "%s=%s" % (
-        self.position,
-        "".join([ arg.pack_fmt() for arg in self.args ]))
+    def __init__(self, spec, alt):
+        self.spec = spec
+        [self.name, self.position] = alt[1].split("=")
+        # some spec alternates are identified by constant name, so we do the
+        # lookup here.
+        if not re.match("[0-9]+", self.position):
+            val_name = self.position.split(".")[2]
+            constant = spec.lookup_constant("EventKind", val_name)
+            self.position = constant.value
+        self.args = []
+        for arg_spec in alt[2:]:
+            self.args.append(create_arg_from_spec(spec, arg_spec))
 
-class Event:
-  def __init__(self, parent, event):
-    self.parent = parent
-    self.suspend_policy = create_arg_from_spec(parent, event[1])
-    self.events= create_arg_from_spec(parent, event[2])
-  def pack_fmt(self):
-    return "".join([
-        self.suspend_policy.pack_fmt(),
-        self.events.pack_fmt()
-        ])
+    def decode(self, data, accum={}):
+        result = {}
+        for arg in self.args:
+            (data, result) = arg.decode(data, result)
+        accum[self.name] = result
+        return data, accum
 
 class ErrorRef:
-  def __init__(self, parent, error):
-    self.parent = parent
+  def __init__(self, spec, error):
+    self.spec = spec
     self.name = error[1]
 
-def create_arg_from_spec(parent, arg):
-  arg_type = arg[0]
-  try:
-    return {
-      'Repeat':Repeat,
-      'Group':Group,
-      'Event':Event,
-      'Select':Select}[arg_type](parent, arg)
-  except KeyError:
-    return Simple(parent, arg)
 
-def get_alt_int_position(alt):
-  # a hack ensues. replace with something better.
-  spec = alt.parent
-  # find the spec (its parent_ is None)
-  while spec.parent != None:
-    spec = spec.parent
-  # find the "EventKind" constant set. Complain if not exists.
-  constants = None
-  for constant_set in spec.constant_sets:
-    if constant_set.name == "EventKind":
-      constants = constant_set.constants
-      break
-  if constants == None:
-    raise Error("No EventKind constant set")
-  # position looks like "JDWP.EventKind.BREAKPOINT", e.g.
-  val = alt.position.split(".")[2]
-  for constant in constants:
-    if constant.name[len("EventKind_"):] == val:
-      return constant.value
-  raise Error("Unrecognized EventType constant: %s" % alt.position)
+def create_arg_from_spec(spec, arg):
+    arg_type = arg[0]
+    type_map = {
+            'Repeat': Repeat,
+            'Group': Group,
+            'Select': Select}
+    if arg_type in type_map:
+        return type_map[arg_type](spec, arg)
+    else:
+        return Simple(spec, arg)
 
-def to_bytestring(fmt, source):
-  return ''.join([
-    chr(x) for x in to_bytearray(fmt, source) ])
-
-def to_bytearray(fmt, source):
-  return transform(fmt, source, bytearray(), get_packer)[0]
-
-def from_bytearray(fmt, source):
-  return transform(fmt, source, [], get_unpacker)[0]
-
-def transform(fmt, source, initial, getter):
-  if fmt == "":
-    return (initial, [])
-  parsed_fmt = FmtGrammar().parseString(fmt)
-  return create_composite_from_parsed_fmt(parsed_fmt, getter)(initial, source)
-
-def compose_binary_functions(f1, f2):
-  return lambda a, b : f2(*f1(a, b))
-
-def create_composite_from_parsed_fmt(parsed_fmt, getter):
-  if len(parsed_fmt) == 0:
-    return lambda a, b : (a, b)
-  return lambda a, b : \
-      reduce(compose_binary_functions, [ getter(x) for x in parsed_fmt ])(a, b)
-
-def get_transform_spec(fmt_spec):
-  if fmt_spec in transform_specs:
-    return transform_specs[fmt_spec]
-  else:
-    return transform_specs[fmt_spec[0]](fmt_spec[1:])
-
-def get_unpacker(fmt_spec):
-  return lambda output, source : \
-      (output + get_transform_spec(fmt_spec)['from_bytearray'](source),
-       get_transform_spec(fmt_spec)['restfunc'](source))
-
-def get_packer(fmt_spec):
-  return lambda output, source : \
-      (output + get_transform_spec(fmt_spec)['to_bytearray'](source),
-       source[1:])
-
-def string_from_bytearray(source):
-  strlen = struct.unpack(">I", source[0:4])[0]
-  fmtstr = str(strlen) + "s"
-  string_subarray = source[4:4 + strlen]
-  return [struct.unpack(fmtstr, string_subarray)[0].decode("UTF-8")]
-
-boolean = {
-    'to_bytearray' : lambda s : bytearray(struct.pack(">B", s[0])),
-    'from_bytearray' : lambda s : [struct.unpack(">B", s[0:1])[0] != 0],
-    'restfunc' : lambda s : s[1:] }
-
-string = {
-    'to_bytearray' : lambda s : \
-        struct.pack(">I", len(s[0])) + bytearray(s[0], "UTF-8"),
-    'from_bytearray' : string_from_bytearray,
-    'restfunc' : lambda s : s[4+struct.unpack(">I", s[0:4])[0]:] }
-
-
-struct_pack_fmt_sizes = { 'I': 4,
-                          'B': 1,
-                          'Q': 8 }
-
-def fixed_length_transform_spec(fmtstr):
-  length = sum([struct_pack_fmt_sizes[c] for c in fmtstr])
-  if len(fmtstr) == 1:
-    return {
-        'to_bytearray' : lambda s : \
-            bytearray(struct.pack(">" + fmtstr, s[0])),
-        'from_bytearray' :
-            lambda s : list(struct.unpack(">" + fmtstr, s[0:length])),
-        'restfunc' : lambda s : s[length:]
-        }
-  return {
-      'to_bytearray' : lambda s : bytearray(struct.pack(">" + fmtstr, *s[0])),
-      'from_bytearray' :
-          lambda s : [struct.unpack(">" + fmtstr, s[0:length])],
-      'restfunc' : lambda s : s[length:]
-      }
-
-def transform_spec_from_base_functions(to_bytearray_base,
-                                       from_bytearray_base,
-                                       restfunc_base):
-  return lambda subfmt : {
-      'to_bytearray' :
-          lambda s : to_bytearray_base(subfmt, s),
-      'from_bytearray' :
-          lambda s : from_bytearray_base(subfmt, s),
-      'restfunc' :
-          lambda s : restfunc_base(subfmt, s),
-      }
-
-def repeat_from_bytearray_base(subfmt, s):
-  unpacker = create_composite_from_parsed_fmt(subfmt, get_unpacker)
-  count = struct.unpack(">I", s[0:4])[0]
-  result = []
-  sub = s[4:]
-  for i in range(count):
-    (sub_result, sub) = unpacker([], sub)
-    result.append(sub_result)
-  return [result]
-
-def repeat_to_bytearray_base(subfmt, s):
-  packer = create_composite_from_parsed_fmt(subfmt, get_packer)
-  result = bytearray(struct.pack(">I", len(s)))
-  if len(s) == 0:
-    return result
-  for entry in s:
-    result += packer(bytearray(), entry)[0]
-  return result
-
-def repeat_restfunc_base(subfmt, s):
-  unpacker = create_composite_from_parsed_fmt(subfmt, get_unpacker)
-  count = struct.unpack(">I", s[0:4])[0]
-  sub = s[4:]
-  for i in range(count):
-    sub = unpacker([], sub)[1]
-  return sub
-
-def select_subfmt_to_dict(subfmt):
-  return dict(map(lambda x : (x[0], x[1:]), subfmt[1:]))
-
-def select_from_bytearray_base(subfmt, s):
-  return select_parse_base(subfmt, s)[0]
-
-def select_restfunc_base(subfmt, s):
-  return select_parse_base(subfmt, s)[1] 
-
-def select_parse_base(subfmt, s):
-  # unpack decider
-  decider_unpacker = create_composite_from_parsed_fmt(subfmt[0:1], get_unpacker)
-  (decider_output, decider_source) = decider_unpacker([], s)
-  decision = decider_output[0]
-  # get subfmt and pack sub message
-  sub_unpacker_fmt = select_subfmt_to_dict(subfmt)[str(decision)]
-  sub_unpacker = \
-      create_composite_from_parsed_fmt(sub_unpacker_fmt, get_unpacker)
-  (sub_output, sub_source) = sub_unpacker([], decider_source)
-  # return outputs
-  return [decision, sub_output], sub_source
-
-def select_to_bytearray_base(subfmt, s):
-  # pack decider
-  decider_packer = create_composite_from_parsed_fmt(subfmt[0:1], get_packer)
-  decision = s[0]
-  decider_output = decider_packer(bytearray(), [decision])[0]
-  # get subfmt and pack sub message
-  sub_packer_fmt =  select_subfmt_to_dict(subfmt)[str(decision)]
-  sub_packer = create_composite_from_parsed_fmt(sub_packer_fmt, get_packer)
-  (sub_output, sub_structure) = sub_packer(bytearray(), s[1])
-  return decider_output + sub_output
-
-def FmtGrammar():
-  open_paren = pp.Literal("(").suppress()
-  close_paren = pp.Literal(")").suppress()
-  string = pp.Literal("S")
-  int32 = pp.Literal("I")
-  boolean = pp.Literal("b")
-  byte = pp.Literal("B")
-  int64 = pp.Literal("L")
-  array_region = pp.Literal("A")
-  tagged_value = pp.Literal("V")
-  tagged_object_id = pp.Literal("T")
-  location = pp.Literal("X")
-  reference_type = pp.Literal("R")
-  atomic = (string | int32 | boolean | byte | int64 | location |
-      tagged_object_id | tagged_value | array_region | reference_type)
-  fmt_type = pp.Forward()
-  repeat = pp.Group( pp.Literal("*") + open_paren + fmt_type + close_paren)
-  option = pp.Group(pp.Regex("[0-9]+") + pp.Literal("=").suppress() + fmt_type)
-  or_symbol = pp.Literal("|").suppress()
-  select = pp.Group(pp.Literal("?") + pp.Literal("B") +
-      open_paren + option + pp.ZeroOrMore(or_symbol + option) + close_paren)
-  fmt_type << pp.ZeroOrMore(atomic | repeat | select)
-  return fmt_type
-
-transform_specs = { 'I': fixed_length_transform_spec("I"),
-                    'B': fixed_length_transform_spec("B"),
-                    'L': fixed_length_transform_spec("Q"),
-                    'R': fixed_length_transform_spec("Q"),
-                    'T': fixed_length_transform_spec("BQ"),
-                    'X': fixed_length_transform_spec("BQQQ"),
-                    'b': boolean,
-                    'S': string,
-                    '*': transform_spec_from_base_functions(
-                             repeat_to_bytearray_base,
-                             repeat_from_bytearray_base,
-                             repeat_restfunc_base),
-                    '?': transform_spec_from_base_functions(
-                             select_to_bytearray_base,
-                             select_from_bytearray_base,
-                             select_restfunc_base) }
 
 SPEC_GRAMMAR_OPEN_PAREN = pp.Literal("(").suppress()
 SPEC_GRAMMAR_CLOSE_PAREN = pp.Literal(")").suppress()
@@ -612,75 +469,6 @@ SPEC_GRAMMAR_S_EXP_LIST = pp.Group(SPEC_GRAMMAR_OPEN_PAREN +
 SPEC_GRAMMAR_S_EXP << ( SPEC_GRAMMAR_STRING | SPEC_GRAMMAR_S_EXP_LIST )
 GRAMMAR_JDWP_SPEC = pp.OneOrMore(SPEC_GRAMMAR_S_EXP)
 
-SPECMAP_STRUCT_FMTS = dict([
-    ("string", "S"),
-    ("boolean", "b"),
-    ("byte", "B"),
-    ("int", "I"),
-    ("long", "L"),
-    ("referenceType", "R"),
-    ("referenceTypeID", "R"),
-    ("threadObject", "O"),
-    ("threadGroupObject", "O"),
-    ("stringObject", "O"),
-    ("object", "O"),
-    ("classLoaderObject", "O"),
-    ("field", "F"),
-    ("method", "M"),
-    ("value", "V"),
-    ("interfaceType", "R"),
-    ("classObject", "R"),
-    ("tagged-object", "T"),
-    ("classType", "R"),
-    ("untagged-value", "U"),
-    ("arrayType", "R"),
-    ("frame", "f"),
-    ("location", "X"),
-    ("arrayObject", "L"),
-    ("typed-sequence", "A") ])
-
-SIZE_LOOKUPS_BY_TYPE_NAME = {
-    "byte":	lambda id_sizes: 1,
-    "boolean":	lambda id_sizes: 1,
-    "int":	lambda id_sizes: 4,
-    "long":	lambda id_sizes: 8,
-    "objectID":	lambda id_sizes: id_sizes['objectIDSize'],
-    "tagged-objectID":	lambda id_sizes: 1 + id_sizes['objectIDSize'],
-    "threadID":	lambda id_sizes: id_sizes['objectIDSize'],
-    "threadGroupID":	lambda id_sizes: id_sizes['objectIDSize'],
-    "stringID":	lambda id_sizes: id_sizes['objectIDSize'],
-    "classLoaderID":	lambda id_sizes: id_sizes['objectIDSize'],
-    "classObjectID":	lambda id_sizes: id_sizes['objectIDSize'],
-    "arrayID":	lambda id_sizes: id_sizes['objectIDSize'],
-    "referenceTypeID":	lambda id_sizes: id_sizes[referenceTypeIDSize],
-    "classID":	lambda id_sizes: id_sizes[referenceTypeIDSize],
-    "interfaceID":	lambda id_sizes: id_sizes[referenceTypeIDSize],
-    "arrayTypeID":	lambda id_sizes: id_sizes[referenceTypeIDSize],
-    "methodID":	lambda id_sizes: id_sizes['methodIDSize'],
-    "fieldID":	lambda id_sizes: id_sizes['fieldIDSize'],
-    "frameID":	lambda id_sizes: id_sizes['frameIDSize'] }
-
-def TYPE_SIZES():
-  return '''
-byte	1
-boolean	1
-int	4
-long	8
-objectID	id_sizes['objectIDSize']
-tagged-objectID	1+id_sizes['objectIDSize']
-threadID	id_sizes['objectIDSize']
-threadGroupID	id_sizes['objectIDSize']
-stringID	id_sizes['objectIDSize']
-classLoaderID	id_sizes['objectIDSize']
-classObjectID	id_sizes['objectIDSize']
-arrayID	id_sizes['objectIDSize']
-referenceTypeID	id_sizes['referenceTypeIDSize']
-classID	id_sizes['referenceTypeIDSize']
-interfaceID	id_sizes['referenceTypeIDSize']
-arrayTypeID	id_sizes['referenceTypeIDSize']
-methodID	id_sizes['methodIDSize']
-fieldID	id_sizes['fieldIDSize']
-frameID	id_sizes['frameIDSize']'''
 
 # This is the actual spec text. Where else should we put it?
 def RAW_JDWP_TEXT():

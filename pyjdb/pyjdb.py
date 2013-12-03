@@ -1,5 +1,6 @@
-import pyparsing as pp
+import pyparsing
 import re
+import select
 import socket
 import struct
 import threading
@@ -16,11 +17,12 @@ def debug_string(obj):
     from pprint import pprint
     pprint(vars(obj))
 
+
 class Jdwp(object):
     def __init__(self, host="localhost", jvm_port=5005, event_cb=None):
-	self.__jdwp_spec = JdwpSpec()
-	self.__jdwp_connection = JdwpConnection(
-                host, jvm_port, self.__jdwp_spec, event_cb)
+        self.__jdwp_spec = JdwpSpec()
+        self.__jdwp_connection = JdwpConnection(
+                host, jvm_port, self.__jdwp_spec)
 
     def initialize(self):
         for command_set_name in self.__jdwp_spec.command_sets:
@@ -30,12 +32,11 @@ class Jdwp(object):
         for constant_set_name in self.__jdwp_spec.constant_sets:
             constant_set = self.__jdwp_spec.constant_sets[constant_set_name]
             setattr(self, constant_set_name, GenericConstantSet(constant_set))
-	self.__jdwp_connection.initialize()
+        self.__jdwp_connection.initialize()
         self.__jdwp_spec.id_sizes = self.VirtualMachine.IDSizes()
 
     def disconnect(self):
         self.__jdwp_connection.disconnect()
-
 
 class GenericService(object):
     def __init__(self, jdwp_connection, command_set):
@@ -54,47 +55,81 @@ class GenericConstantSet(object):
             setattr(self, constant_name, constant.value)
 
 class JdwpConnection(object):
-    def __init__(self, host, port, jdwp_spec, event_cb):
+    def __init__(self, host, port, jdwp_spec):
         self.__host = host
         self.__port = port
         self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.__jdwp_spec = jdwp_spec
         self.__next_req_id = 1
         self.__replies_by_req_id = {}
-        self.__event_cb = event_cb
+        self.events = []
 
-    def initialize(self):
-        # open socket to jvm
-        self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.__socket.connect(('localhost', self.__port))
-        # handshake
+    def __handshake(self):
         handshake = b'JDWP-Handshake'
-        self.__socket.send(handshake)
-        data = self.__socket.recv(len(handshake))
+        bytes_sent = 0
+        while bytes_sent < len(handshake):
+            _, [write_ready], _ = select.select(
+                    [], [self.__socket], [])
+            bytes_sent += write_ready.send(handshake[bytes_sent:])
+
+        bytes_received = 0
+        data = bytearray()
+        while bytes_received < len(handshake):
+            [read_ready], _, _ = select.select(
+                    [self.__socket], [], [])
+            data += self.__socket.recv(len(handshake) - bytes_received)
+
+        print(data)
         if data != handshake:
-            self.__socket.close()
             raise Error('Handshake failed')
 
+    def __await_vm_start(self):
         vm_start_event_header = self.__socket.recv(11);
         length, _, _, _ = struct.unpack('>IIBH', vm_start_event_header)
         vm_start_event_data = self.__socket.recv(length - 11);
         remainder_fmt = { 1: "B",
                 4: "I",
                 8: "Q" }[length - 11 - 10]
-        _, _, event_kind, _, _ = struct.unpack('>BIBI' + remainder_fmt, vm_start_event_data)
+        _, _, event_kind, _, _ = struct.unpack(
+                '>BIBI' + remainder_fmt, vm_start_event_data)
         if event_kind != 90:  # vm_start
             raise Error("I...i don't know")
 
+    def __hardcoded_id_sizes_request(self):
         self.__socket.send(struct.pack(">IIBBB", 11, 0, 0, 1, 7))
         id_sizes_response_data = self.__socket.recv(31);
         id_sizes_response = struct.unpack('>IIBHIIIII', id_sizes_response_data)
         self.id_sizes = id_sizes_response[4:]
-        self.__reader_thread = JdwpReaderThread(self)
 
+    def initialize(self):
+        # open socket to jvm
+        self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.__socket.settimeout(10.0)
+        num_retries = 0
+        while num_retries < 5:
+            self.__socket.connect((self.__host, self.__port))
+            time.sleep(.1)
+            num_retries += 1
+
+        self.__handshake()
+        self.__await_vm_start()
+        self.__hardcoded_id_sizes_request()
+
+        self.event_cv = threading.Condition()
+        self.reply_cv = threading.Condition()
+        self.__listening_lock = threading.Lock()
+        with self.__listening_lock:
+            self.__listening = True
+        self.__reader_thread = threading.Thread(
+                target = self.__listen,
+                name = "jdwp_listener")
+        self.__reader_thread.start()
 
     def disconnect(self):
-        self.__reader_thread.running = False
         self.__socket.close();
+        with self.__listening_lock:
+            self.__listening = False
+        self.__reader_thread.join(10.0)
 
     def command_request(self, service_name, command_name, data):
         command = self.__jdwp_spec.lookup_command(service_name, command_name)
@@ -103,40 +138,41 @@ class JdwpConnection(object):
                 command.command_set_id, command.id, req_bytes)
         return command.decode(resp_bytes)
 
-    def __send_command_sync(self, cmd_set_id, cmd_id, request_bytes):
-        '''Synchronous wrapper around a call to __send_command_async'''
-        req_id = self.__send_command_async(cmd_set_id, cmd_id, request_bytes)
-        return self.__get_reply(req_id)
+    def __listen(self):
+        while True:
+            with self.__listening_lock:
+                if not self.__listening:
+                    return
+            req_id, flags, err, reply_packed = self.__receive()
+            if req_id == -1:
+                pass
+            if err == EVENT_MAGIC_NUMBER:
+                self.__handle_event(req_id, reply_packed)
+            if err == 0:
+                self.__handle_reply(req_id, reply_packed)
+            else:
+                self.__handle_error(req_id, err)
 
-    def __send_command_async(self, cmd_set_id, cmd_id, request_bytes = []):
-        '''Generate req_id, pack req data, and send cmd to jvm. Returns req_id'''
-        req_id = self.__generate_req_id()
-        length = 11 + len(request_bytes)
-        header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
-        self.__socket.send(header + request_bytes)
-        return req_id
+    def __handle_event(self, req_id, event_packed):
+        command = self.__jdwp_spec.lookup_command("Event", "Composite")
+        self.event_cv.acquire()
+        self.events.append((req_id, command.decode(event_packed)))
+        self.event_cv.notify()
+        self.event_cv.release()
 
-    def __get_reply(self, req_id):
-        '''Blocks until a reply is received for 'req_id'; returns err, reply'''
-        while req_id not in self.__replies_by_req_id:
-            time.sleep(.05)
-        err, reply = self.__replies_by_req_id[req_id]
-        if err != 0:
-            raise Error("JDWP error: %s" % err)
-        return reply
-
-    def handle_event(self, req_id, event_packed):
-        if self.__event_cb:
-            command = self.__jdwp_spec.lookup_command("Event", "Composite")
-            self.__event_cb(req_id, command.decode(event_packed))
-
-    def handle_reply(self, req_id, reply_packed):
+    def __handle_reply(self, req_id, reply_packed):
+        self.reply_cv.acquire()
         self.__replies_by_req_id[req_id] = (0, reply_packed)
+        self.reply_cv.notify()
+        self.reply_cv.release()
 
-    def handle_error(self, req_id, err):
+    def __handle_error(self, req_id, err):
+        self.reply_cv.acquire()
         self.__replies_by_req_id[req_id] = (err, [])
+        self.reply_cv.notify()
+        self.reply_cv.release()
 
-    def receive(self):
+    def __receive(self):
         '''Reads header, flags, error code, and subsequent data from jdwp socket'''
         header = self.__socket.recv(11);
         if len(header) == 0:
@@ -151,32 +187,36 @@ class JdwpConnection(object):
         reply_packed = ''.join([chr(x) for x in msg])
         return req_id, flags, err, reply_packed
 
+    def __send_command_sync(self, cmd_set_id, cmd_id, request_bytes):
+        '''Synchronous wrapper around a call to __send_command_async'''
+        req_id = self.__send_command_async(cmd_set_id, cmd_id, request_bytes)
+        return self.__get_reply(req_id)
+
+    def __send_command_async(self, cmd_set_id, cmd_id, request_bytes = None):
+        '''Generate req_id and send command to jvm. Returns req_id'''
+        if request_bytes is None:
+            request_bytes = []
+        req_id = self.__generate_req_id()
+        length = 11 + len(request_bytes)
+        header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
+        self.__socket.send(header + request_bytes)
+        return req_id
+
+    def __get_reply(self, req_id):
+        '''Blocks until a reply is received for 'req_id'; returns err, reply'''
+        self.reply_cv.acquire()
+        while req_id not in self.__replies_by_req_id:
+            self.reply_cv.wait()
+        err, reply = self.__replies_by_req_id[req_id]
+        self.reply_cv.release()
+        if err != 0:
+            raise Error("JDWP error: %s" % err)
+        return reply
+
     def __generate_req_id(self):
         result = self.__next_req_id
         self.__next_req_id += 1
         return result
-
-class JdwpReaderThread(threading.Thread):
-    '''Listens for, parses replies/events; forwards results to Jdwp'''
-    def __init__(self, conn):
-        super(JdwpReaderThread, self).__init__(name="jdwp_reader")
-        self.conn = conn
-        self.setDaemon(True)
-        self.running = True
-        self.start()
-
-    def run(self):
-        while self.running:
-            req_id, flags, err, reply_packed = self.conn.receive()
-            if req_id == -1:
-                continue
-            if err != EVENT_MAGIC_NUMBER and err != 0:
-                self.conn.handle_error(req_id, err)
-                continue
-            if err == EVENT_MAGIC_NUMBER: # this is actually an event message
-                self.conn.handle_event(req_id, reply_packed)
-                continue
-            self.conn.handle_reply(req_id, reply_packed)
 
 
 class JdwpSpec:
@@ -292,6 +332,18 @@ class Command:
         return self.response.decode(data)
 
 
+def create_arg_from_spec(spec, arg):
+    arg_type = arg[0]
+    type_map = {
+            'Repeat': Repeat,
+            'Group': Group,
+            'Select': Select}
+    if arg_type in type_map:
+        return type_map[arg_type](spec, arg)
+    else:
+        return Simple(spec, arg)
+
+
 class Request:
     def __init__(self, spec, request):
         self.spec = spec
@@ -322,7 +374,9 @@ class Simple:
         self.type = simple[0]
         self.name = simple[1]
 
-    def decode(self, data, accum={}):
+    def decode(self, data, accum=None):
+        if accum is None:
+            accum = {}
         if self.type == 'string':
             strlen = struct.unpack(">I", data[0:4])[0]
             fmt = str(strlen) + "s"
@@ -366,7 +420,9 @@ class Repeat:
         self.name = repeat[1]
         self.arg = create_arg_from_spec(spec, repeat[2])
 
-    def decode(self, data, accum={}):
+    def decode(self, data, accum=None):
+        if accum is None:
+            accum = {}
         count = struct.unpack(">I", data[0:4])[0]
         accum[self.name] = []
         data = data[4:]
@@ -390,7 +446,9 @@ class Group:
         self.name = group[1]
         self.args = [ create_arg_from_spec(spec, arg) for arg in group[2:] ]
 
-    def decode(self, data, accum={}):
+    def decode(self, data, accum=None):
+        if accum is None:
+            accum = {}
         result = {}
         for arg in self.args:
             (data, result) = arg.decode(data, result)
@@ -408,7 +466,9 @@ class Select:
             alt = Alt(spec, alt_spec)
             self.alts[alt.position] = alt
 
-    def decode(self, data, accum={}):
+    def decode(self, data, accum=None):
+        if accum is None:
+            accum = {}
         # pop the choice byte off the top
         data, result = self.choice_arg.decode(data)
         choice = result[self.choice_arg.name]
@@ -432,7 +492,9 @@ class Alt:
         for arg_spec in alt[2:]:
             self.args.append(create_arg_from_spec(spec, arg_spec))
 
-    def decode(self, data, accum={}):
+    def decode(self, data, accum=None):
+        if accum is None:
+            accum = {}
         result = {}
         for arg in self.args:
             (data, result) = arg.decode(data, result)
@@ -445,29 +507,17 @@ class ErrorRef:
     self.name = error[1]
 
 
-def create_arg_from_spec(spec, arg):
-    arg_type = arg[0]
-    type_map = {
-            'Repeat': Repeat,
-            'Group': Group,
-            'Select': Select}
-    if arg_type in type_map:
-        return type_map[arg_type](spec, arg)
-    else:
-        return Simple(spec, arg)
-
-
-SPEC_GRAMMAR_OPEN_PAREN = pp.Literal("(").suppress()
-SPEC_GRAMMAR_CLOSE_PAREN = pp.Literal(")").suppress()
-SPEC_GRAMMAR_QUOTED_STRING = pp.dblQuotedString
+SPEC_GRAMMAR_OPEN_PAREN = pyparsing.Literal("(").suppress()
+SPEC_GRAMMAR_CLOSE_PAREN = pyparsing.Literal(")").suppress()
+SPEC_GRAMMAR_QUOTED_STRING = pyparsing.dblQuotedString
 SPEC_GRAMMAR_QUOTED_STRING = SPEC_GRAMMAR_QUOTED_STRING.suppress()
-SPEC_GRAMMAR_SPEC_STRING = pp.OneOrMore(SPEC_GRAMMAR_QUOTED_STRING)
-SPEC_GRAMMAR_S_EXP = pp.Forward()
-SPEC_GRAMMAR_STRING = SPEC_GRAMMAR_SPEC_STRING | pp.Regex("([^()\s])+")
-SPEC_GRAMMAR_S_EXP_LIST = pp.Group(SPEC_GRAMMAR_OPEN_PAREN +
-    pp.ZeroOrMore(SPEC_GRAMMAR_S_EXP) + SPEC_GRAMMAR_CLOSE_PAREN)
+SPEC_GRAMMAR_SPEC_STRING = pyparsing.OneOrMore(SPEC_GRAMMAR_QUOTED_STRING)
+SPEC_GRAMMAR_S_EXP = pyparsing.Forward()
+SPEC_GRAMMAR_STRING = SPEC_GRAMMAR_SPEC_STRING | pyparsing.Regex("([^()\s])+")
+SPEC_GRAMMAR_S_EXP_LIST = pyparsing.Group(SPEC_GRAMMAR_OPEN_PAREN +
+    pyparsing.ZeroOrMore(SPEC_GRAMMAR_S_EXP) + SPEC_GRAMMAR_CLOSE_PAREN)
 SPEC_GRAMMAR_S_EXP << ( SPEC_GRAMMAR_STRING | SPEC_GRAMMAR_S_EXP_LIST )
-GRAMMAR_JDWP_SPEC = pp.OneOrMore(SPEC_GRAMMAR_S_EXP)
+GRAMMAR_JDWP_SPEC = pyparsing.OneOrMore(SPEC_GRAMMAR_S_EXP)
 
 
 # This is the actual spec text. Where else should we put it?

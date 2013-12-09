@@ -1,6 +1,5 @@
 import pyparsing
 import re
-import select
 import socket
 import struct
 import threading
@@ -80,21 +79,10 @@ class JdwpConnection(object):
 
     def __handshake(self):
         handshake = b'JDWP-Handshake'
-        bytes_sent = 0
-        while bytes_sent < len(handshake):
-            _, [write_ready], _ = select.select(
-                    [], [self.__socket], [])
-            bytes_sent += write_ready.send(handshake[bytes_sent:])
-
-        bytes_received = 0
-        data = bytearray()
-        while bytes_received < len(handshake):
-            [read_ready], _, _ = select.select(
-                    [self.__socket], [], [])
-            data += self.__socket.recv(len(handshake) - bytes_received)
-
-        print(data)
+        self.__socket.send(handshake)
+        data = self.__socket.recv(len(handshake))
         if data != handshake:
+            self.__socket.close()
             raise Error('Handshake failed')
 
     def __await_vm_start(self):

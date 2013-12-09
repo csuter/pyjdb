@@ -37,6 +37,20 @@ class Jdwp(object):
     def disconnect(self):
         self.__jdwp_connection.disconnect()
 
+    def await_event(self, matcher_fn):
+        found_event = None
+        while found_event is None:
+            self.__jdwp_connection.event_cv.acquire()
+            while not self.__jdwp_connection.events:
+                self.__jdwp_connection.event_cv.wait()
+            for event in self.__jdwp_connection.events:
+                if matcher_fn(event):
+                    found_event = event
+                    break
+            self.__jdwp_connection.event_cv.release()
+        return found_event
+                
+
 class GenericService(object):
     def __init__(self, jdwp_connection, command_set):
         self.__conn = jdwp_connection
@@ -92,12 +106,20 @@ class JdwpConnection(object):
     def initialize(self):
         # open socket to jvm
         self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.__socket.settimeout(10.0)
-        num_retries = 0
-        while num_retries < 5:
-            self.__socket.connect((self.__host, self.__port))
+        self.__socket.settimeout(1.0)
+        max_tries = 20
+        num_tries = 0
+        while True:
+            try:
+                self.__socket.connect((self.__host, self.__port))
+                break
+            except socket.error as e:
+                if num_tries > 20:
+                    raise Error("Failed to connect to %s:%s)" %
+                            (self.__host, self.__port))
+                pass
             time.sleep(.1)
-            num_retries += 1
+            num_tries += 1
 
         self.__handshake()
         self.__await_vm_start()
@@ -111,13 +133,13 @@ class JdwpConnection(object):
         self.__reader_thread = threading.Thread(
                 target = self.__listen,
                 name = "jdwp_listener")
+        self.__reader_thread.setDaemon(True)
         self.__reader_thread.start()
 
     def disconnect(self):
         self.__socket.close();
         with self.__listening_lock:
             self.__listening = False
-        self.__reader_thread.join(10.0)
 
     def command_request(self, service_name, command_name, data):
         command = self.__jdwp_spec.lookup_command(service_name, command_name)
@@ -131,7 +153,10 @@ class JdwpConnection(object):
             with self.__listening_lock:
                 if not self.__listening:
                     return
-            req_id, flags, err, reply_packed = self.__receive()
+            try:
+                req_id, flags, err, reply_packed = self.__receive()
+            except socket.error as e:
+                continue
             if req_id == -1:
                 pass
             if err == EVENT_MAGIC_NUMBER:
@@ -207,7 +232,7 @@ class JdwpConnection(object):
         return result
 
 
-class JdwpSpec:
+class JdwpSpec(object):
     def __init__(self):
         self.__clean_spec_text = re.sub("\s*=\s*", "=", RAW_JDWP_TEXT())
         self.__spec = GRAMMAR_JDWP_SPEC.parseString(self.__clean_spec_text)
@@ -243,30 +268,32 @@ class JdwpSpec:
 
     def lookup_id_size(self, type_name):
         lookup_fns_by_type = {
-            "byte":	lambda id_sizes: 1,
-            "boolean":	lambda id_sizes: 1,
-            "int":	lambda id_sizes: 4,
-            "long":	lambda id_sizes: 8,
-            "objectID":	lambda id_sizes: id_sizes['objectIDSize'],
-            "tagged-objectID":	lambda id_sizes: 1 + id_sizes['objectIDSize'],
-            "threadID":	lambda id_sizes: id_sizes['objectIDSize'],
-            "threadObject":	lambda id_sizes: id_sizes['objectIDSize'],
-            "threadGroupID":	lambda id_sizes: id_sizes['objectIDSize'],
-            "stringID":	lambda id_sizes: id_sizes['objectIDSize'],
-            "classLoaderID":	lambda id_sizes: id_sizes['objectIDSize'],
-            "classObjectID":	lambda id_sizes: id_sizes['objectIDSize'],
-            "arrayID":	lambda id_sizes: id_sizes['objectIDSize'],
-            "referenceTypeID":	lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "classID":	lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "interfaceID":	lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "arrayTypeID":	lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "methodID":	lambda id_sizes: id_sizes['methodIDSize'],
-            "fieldID":	lambda id_sizes: id_sizes['fieldIDSize'],
-            "frameID":	lambda id_sizes: id_sizes['frameIDSize'] }
+            "byte":    lambda id_sizes: 1,
+            "boolean":    lambda id_sizes: 1,
+            "int":    lambda id_sizes: 4,
+            "long":    lambda id_sizes: 8,
+            "objectID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "tagged-objectID":    lambda id_sizes: 1 + id_sizes['objectIDSize'],
+            "threadID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "threadObject":    lambda id_sizes: id_sizes['objectIDSize'],
+            "threadGroupID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "stringID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "classLoaderID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "classObjectID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "arrayID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "referenceType":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "referenceTypeID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "classID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "interfaceID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "arrayTypeID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
+            "method":    lambda id_sizes: id_sizes['methodIDSize'],
+            "methodID":    lambda id_sizes: id_sizes['methodIDSize'],
+            "fieldID":    lambda id_sizes: id_sizes['fieldIDSize'],
+            "frameID":    lambda id_sizes: id_sizes['frameIDSize'] }
         return lookup_fns_by_type[type_name](self.id_sizes)
 
 
-class ConstantSet:
+class ConstantSet(object):
     def __init__(self, constant_set):
         self.name = constant_set[1]
         self.constants = {}
@@ -275,7 +302,7 @@ class ConstantSet:
             self.constants[constant.name] = constant
 
 
-class Constant:
+class Constant(object):
     def __init__(self, constant):
         [self.name, value_str] = constant[1].split("=")
         if value_str.startswith("0x"):
@@ -287,7 +314,7 @@ class Constant:
                 self.value = value_str
 
 
-class CommandSet:
+class CommandSet(object):
     def __init__(self, spec, command_set):
         self.spec = spec
         [self.name, self.id] = command_set[1].split("=")
@@ -298,7 +325,7 @@ class CommandSet:
             self.commands[command.name] = command
 
 
-class Command:
+class Command(object):
     def __init__(self, spec, command_set_id, command):
         self.spec = spec
         self.command_set_id = command_set_id
@@ -325,14 +352,15 @@ def create_arg_from_spec(spec, arg):
     type_map = {
             'Repeat': Repeat,
             'Group': Group,
-            'Select': Select}
+            'Select': Select,
+            'location': Location}
     if arg_type in type_map:
         return type_map[arg_type](spec, arg)
     else:
         return Simple(spec, arg)
 
 
-class Request:
+class Request(object):
     def __init__(self, spec, request):
         self.spec = spec
         self.args = [ create_arg_from_spec(spec, arg) for arg in request[1:] ]
@@ -344,7 +372,7 @@ class Request:
         return result
 
 
-class Response:
+class Response(object):
     def __init__(self, spec, response):
         self.spec = spec
         self.args = [ create_arg_from_spec(spec, arg) for arg in response[1:] ]
@@ -356,7 +384,7 @@ class Response:
         return result
 
 
-class Simple:
+class Simple(object):
     def __init__(self, spec, simple):
         self.spec = spec
         self.type = simple[0]
@@ -388,8 +416,8 @@ class Simple:
         if self.type == 'string':
             strlen = len(value)
             fmt = str(strlen) + "s"
-            accum += struct.pack(">I", len(s[0]))
-            accum += bytearray(s[0], "UTF-8")
+            accum += struct.pack(">I", len(value))
+            accum += bytearray(value, "UTF-8")
         elif self.type == 'binary':
             accum += bytearray(struct.pack(">B", int(value)))
         else:
@@ -402,11 +430,19 @@ class Simple:
         return data, accum
 
 
-class Repeat:
+class Repeat(object):
     def __init__(self, spec, repeat):
         self.spec = spec
         self.name = repeat[1]
         self.arg = create_arg_from_spec(spec, repeat[2])
+
+    def encode(self, data, accum):
+        values = data[self.name]
+        accum += struct.pack(">I", len(values))
+        for value in values:
+            _, accum = self.arg.encode(value, accum)
+        del data[self.name]
+        return data, accum
 
     def decode(self, data, accum=None):
         if accum is None:
@@ -419,20 +455,18 @@ class Repeat:
             accum[self.name].append(subaccum[self.arg.name])
         return data, accum
 
-    def encode(self, data, accum):
-        values = data[self.name]
-        accum += struct.pack(">B", len(values))
-        for value in values:
-            (_, subaccum) = self.arg.encode({self.name: value}, bytearray())
-            accum += subaccum
-        del data[self.name]
-        return data, accum
 
-class Group:
+class Group(object):
     def __init__(self, spec, group):
         self.spec = spec
         self.name = group[1]
         self.args = [ create_arg_from_spec(spec, arg) for arg in group[2:] ]
+
+    def encode(self, data, accum):
+        for arg in self.args:
+            _, accum = arg.encode(data[self.name], accum)
+        del data[self.name]
+        return data, accum
 
     def decode(self, data, accum=None):
         if accum is None:
@@ -444,7 +478,18 @@ class Group:
         return data, accum
 
 
-class Select:
+class Location(Group):
+    def __init__(self, spec, loc):
+        self.spec = spec
+        self.name = loc[1]
+        self.args = [
+                Simple(spec, ("byte", "typeTag")),
+                Simple(spec, ("referenceTypeID", "classID")),
+                Simple(spec, ("methodID", "methodID")),
+                Simple(spec, ("long", "index"))]
+
+
+class Select(object):
     def __init__(self, spec, select):
         self.spec = spec
         self.name = select[1]
@@ -452,7 +497,15 @@ class Select:
         self.alts = {}
         for alt_spec in select[3:]:
             alt = Alt(spec, alt_spec)
-            self.alts[alt.position] = alt
+            self.alts[int(alt.position)] = alt
+
+    def encode(self, data, accum):
+        choice = data[self.choice_arg.name]
+        data, accum = self.choice_arg.encode(data, accum)
+        alt = self.alts[choice]
+        _, accum = alt.encode(data[self.name], accum)
+        del data[self.name]
+        return data, accum
 
     def decode(self, data, accum=None):
         if accum is None:
@@ -466,7 +519,7 @@ class Select:
         return data, accum
 
 
-class Alt:
+class Alt(object):
     def __init__(self, spec, alt):
         self.spec = spec
         [self.name, self.position] = alt[1].split("=")
@@ -480,6 +533,13 @@ class Alt:
         for arg_spec in alt[2:]:
             self.args.append(create_arg_from_spec(spec, arg_spec))
 
+    def encode(self, data, accum):
+        result = bytearray()
+        for arg in self.args:
+            (data, result) = arg.encode(data, result)
+        accum += result
+        return data, accum
+
     def decode(self, data, accum=None):
         if accum is None:
             accum = {}
@@ -489,7 +549,7 @@ class Alt:
         accum[self.name] = result
         return data, accum
 
-class ErrorRef:
+class ErrorRef(object):
   def __init__(self, spec, error):
     self.spec = spec
     self.name = error[1]

@@ -13,11 +13,7 @@ class TestJdwpPackage(unittest.TestCase):
             "/usr/bin/java", "-cp", "java_sample/fib.jar",
             "-Xrunjdwp:transport=dt_socket,server=y,suspend=y,address=5005",
             "com.alltheburritos.vimjdb.test.TestProgram"])
-<<<<<<< HEAD
         self.jdwp = pyjdb.Jdwp("localhost", 5005)
-=======
-        self.jdwp = pyjdb.Jdwp('localhost', 5005)
->>>>>>> bac72cf2b133e9be23858edc2154ba3501ec9037
         self.jdwp.initialize();
 
     def tearDown(self):
@@ -26,12 +22,6 @@ class TestJdwpPackage(unittest.TestCase):
         # kill target jvm
         self.test_target_subprocess.send_signal(signal.SIGKILL)
         self.test_target_subprocess.wait()
-<<<<<<< HEAD
-=======
-
-    def handle_event(self, req_id, event):
-        self.events.append(event)
->>>>>>> bac72cf2b133e9be23858edc2154ba3501ec9037
 
     def test_virtual_machine_version(self):
         system_java_version = subprocess.check_output(
@@ -50,7 +40,6 @@ class TestJdwpPackage(unittest.TestCase):
         # if they"re equal, then we"re in business!
         self.assertEquals(system_version_number, jdwp_jvm_version_number)
 
-<<<<<<< HEAD
     def test_virtual_machine_all_classes(self):
         all_classes_response = self.jdwp.VirtualMachine.AllClasses()
         self.assertTrue(all_classes_response["classes"] != None)
@@ -149,84 +138,4 @@ class TestJdwpPackage(unittest.TestCase):
                 0, event["Breakpoint"]["location"]["index"])
 
 if __name__ == "__main__":
-=======
-    #def test_virtual_machine_all_classes(self):
-    #    all_classes_response = self.jdwp.VirtualMachine.AllClasses()
-    #    self.assertTrue(all_classes_response['classes'] != None)
-    #    string_class = [ x for x in all_classes_response['classes'] if
-    #        x['signature'] == u'Ljava/lang/String;' ]
-    #    self.assertEquals(len(string_class), 1)
-
-    #def test_event_request_set_and_resume(self):
-    #    # in this test we will
-    #    #   1. get a list of all loaded classes
-    #    #   2. request notification of class load events
-    #    #   3. resume our suspended program
-    #    #   4. assert that com.alltheburritos.defbug.test.TestProgram gets loaded
-    #    all_classes_response = self.jdwp.VirtualMachine.AllClasses()
-    #    loaded_class_signatures =\
-    #        [ entry['signature'] for entry in all_classes_response['classes'] ]
-    #    self.jdwp.EventRequest.Set({
-    #        "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
-    #        "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
-    #        "modifiers": []})
-    #    # send vm resume to start things off
-    #    self.jdwp.VirtualMachine.Resume()
-    #    time.sleep(.5)
-    #    self.assertGreater(len(self.events), 0)
-    #    test_sig = u'Lcom/alltheburritos/vimjdb/test/TestProgram;'
-    #    found_test_class = False
-    #    for composite in self.events:
-    #        for event in composite["events"]:
-    #            if event["events"]["signature"] == test_sig:
-    #                found_test_class = True
-    #                break
-    #    self.assertTrue(found_test_class) 
-
-    #def test_set_breakpoint(self):
-    #    # we have to first await the loading of our class, so we set an event.
-    #    test_class = "com.alltheburritos.vimjdb.test.TestProgram"
-    #    self.jdwp.EventRequest.Set({
-    #            "eventKind": jdwp_pb2.EventKind_CLASS_PREPARE,
-    #            "SuspendPolicy": jdwp_pb2.SuspendPolicy_ALL,
-    #            "modifiers": [{
-    #                    "modKind": 5,
-    #                    "classPattern": test_class}]})
-    #    # send vm resume to start things off
-    #    self.jdwp.VirtualMachine.Resume()
-    #    # wait for class prepare event
-    #    def matches(event):
-    #        if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
-    #            return event["ClassPrepare"]["signature"] == test_class
-    #    class_prepare_event = self.jdwp.await_event_kind(matcher = matches)
-    #    class_id = class_prepare_event[1][1][3]
-    #    # get class methods
-    #    err, data = self.jdwp.send_command_await_reply(2, 5, [class_id])
-    #    for method in data:
-    #        if method[1] == u'main':
-    #       # find main method id
-    #       main_method_id = method[0]
-    #   # set breakpoint
-    #   breakpoint_request = [
-    #       jdwp_pb2.EventKind_BREAKPOINT,
-    #       jdwp_pb2.SuspendPolicy_ALL,
-    #       [7, [(1, class_id, main_method_id, 0)]]]
-    #   err, data = self.jdwp.send_command_await_reply(15, 1, breakpoint_request)
-    #   breakpoint_request_id = data[0]
-    #   # send vm resume
-    #   self.jdwp.send_command_await_reply(1, 9)
-    #   # wait for breakpoint event
-    #   request_id, breakpoint_event = \
-    #       self.await_event_kind(jdwp_pb2.EventKind_BREAKPOINT, 1)
-    #   expected_breakpoint_event = \
-    #       [jdwp_pb2.SuspendPolicy_ALL,
-    #           [jdwp_pb2.EventKind_BREAKPOINT,
-    #               [breakpoint_request_id,
-    #                1,  # thread_id (get programmatically?)
-    #                (1, class_id, main_method_id, 0)]]]
-    #   # breakpoint should look as expected
-    #   self.assertEquals(breakpoint_event, expected_breakpoint_event)
-
-if __name__ == '__main__':
->>>>>>> bac72cf2b133e9be23858edc2154ba3501ec9037
   unittest.main()

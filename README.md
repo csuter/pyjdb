@@ -1,12 +1,18 @@
 pyjdb - python library for debugging java programs
 
-Provides
- + Pythonic interface to manipulate a running java program, good for quick
-   scripts or more extensive debugging applications
- + Access (if desired) to lower-level jdwp spec implementation in python
+Currently limited in scope; barebones implementation of JDWP spec in python is
+working. In functional tests, a breakpoint in a simple java program is
+successfully set and hit.
 
-Consists internally of
- + a parser for the jdwp spec (see
-   http://docs.oracle.com/javase/7/docs/technotes/guides/jpda/jdwp-spec.html)
- + a jdwp wire format serialization/deserialization library
- + some fun metaclass magic to provide on-the-fly implementation of jdwp spec
+Contents:
+ * java_sample/ - sample java target code and build script for functional tests.
+ * pyjdb/
+   + pyjdb.py - library
+   + pyjdb_test.py - functional tests
+ * test.sh - test script. run to test. install dependencies first (see below)
+ * setup.py - use to install on your system
+
+Dependencies:
+ * pretty recent jdk
+ * python2.7
+ * pyparsing

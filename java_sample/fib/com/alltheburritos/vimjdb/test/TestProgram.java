@@ -11,7 +11,6 @@ public class TestProgram {
   public void run() throws Exception {
     Nest nest = new Nest();
     while (true) {
-      System.out.println("fib(" + n.get() + ") = " + fib(n.get()));
       Thread.sleep(1000);
       n.inc();
     }

@@ -273,12 +273,15 @@ class JdwpSpec(object):
             "boolean":    lambda id_sizes: 1,
             "int":    lambda id_sizes: 4,
             "long":    lambda id_sizes: 8,
+            "object":    lambda id_sizes: id_sizes['objectIDSize'],
             "objectID":    lambda id_sizes: id_sizes['objectIDSize'],
             "tagged-objectID":    lambda id_sizes: 1 + id_sizes['objectIDSize'],
             "threadID":    lambda id_sizes: id_sizes['objectIDSize'],
             "threadObject":    lambda id_sizes: id_sizes['objectIDSize'],
             "threadGroupID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "threadGroupObject":    lambda id_sizes: id_sizes['objectIDSize'],
             "stringID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "stringObject":    lambda id_sizes: id_sizes['objectIDSize'],
             "classLoaderID":    lambda id_sizes: id_sizes['objectIDSize'],
             "classObjectID":    lambda id_sizes: id_sizes['objectIDSize'],
             "arrayID":    lambda id_sizes: id_sizes['objectIDSize'],
@@ -452,8 +455,8 @@ class Repeat(object):
         accum[self.name] = []
         data = data[4:]
         for i in range(count):
-            (data, subaccum) = self.arg.decode(data, {})
-            accum[self.name].append(subaccum[self.arg.name])
+            data, subaccum = self.arg.decode(data, {})
+            accum[self.name].append(subaccum)
         return data, accum
 
 
@@ -465,17 +468,14 @@ class Group(object):
 
     def encode(self, data, accum):
         for arg in self.args:
-            _, accum = arg.encode(data[self.name], accum)
-        del data[self.name]
+            _, accum = arg.encode(data, accum)
         return data, accum
 
     def decode(self, data, accum=None):
         if accum is None:
             accum = {}
-        result = {}
         for arg in self.args:
-            (data, result) = arg.decode(data, result)
-        accum[self.name] = result
+            data, accum = arg.decode(data, accum)
         return data, accum
 
 
@@ -537,7 +537,7 @@ class Alt(object):
     def encode(self, data, accum):
         result = bytearray()
         for arg in self.args:
-            (data, result) = arg.encode(data, result)
+            data, result = arg.encode(data, result)
         accum += result
         return data, accum
 
@@ -546,7 +546,7 @@ class Alt(object):
             accum = {}
         result = {}
         for arg in self.args:
-            (data, result) = arg.decode(data, result)
+            data, result = arg.decode(data, result)
         accum[self.name] = result
         return data, accum
 

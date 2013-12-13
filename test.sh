@@ -23,13 +23,6 @@ set +e
 cd "$dir" # ensure we're back where we started
 PYTHONPATH="." python pyjdb/pyjdb_test.py -v
 
-# build the java test code
-# TODO(cgs): eliminate the need for this to exist outside test code.  it would
-# be easier if compilation/packaging were done automatically from within test
-# setup.
-./java_sample/build.sh
-
-find . -name '*.pyc' | xargs rm
 ps aux \
   | grep java \
   | grep -v grep \

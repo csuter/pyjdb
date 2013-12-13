@@ -3,20 +3,32 @@ import pyjdb
 import signal
 import string
 import subprocess
+import tempfile
 import time
 import unittest
 
-class TestPyjdbPackage(unittest.TestCase):
+TEST_TMP_DIRNAME = tempfile.mkdtemp()
+
+class PyjdbTestBase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        test_source_filename = "%s.java" % cls.debug_target_main_class
+        test_class_filename = "%s.class" % cls.debug_target_main_class
+        test_source_filepath = os.path.join(TEST_TMP_DIRNAME, test_source_filename)
+        test_class_filepath = os.path.join(TEST_TMP_DIRNAME, test_class_filename)
+        with open(test_source_filepath, "w") as test_source_file:
+            test_source_file.write(cls.debug_target_code)
+        build_test_code = subprocess.check_output(
+            "javac %s" % test_source_filepath, shell=True)
+
     def setUp(self):
         # boot up the sample java program in target jvm
         self.devnull = open(subprocess.os.devnull, "r")
         self.test_target_subprocess = subprocess.Popen([
-            "/usr/bin/java", "-cp", "java_sample/fib.jar",
+            "/usr/bin/java", "-cp", TEST_TMP_DIRNAME,
             "-Xrunjdwp:transport=dt_socket,server=y,suspend=y,address=5005",
-            "com.alltheburritos.vimjdb.test.TestProgram"],
-            stdout=self.devnull, stderr=self.devnull)
-        self.test_class = "com.alltheburritos.vimjdb.test.TestProgram"
-        self.test_sig = u"Lcom/alltheburritos/vimjdb/test/TestProgram;"
+            self.debug_target_main_class],
+            stdout = self.devnull, stderr = self.devnull)
         self.jdwp = pyjdb.Jdwp("localhost", 5005)
         self.jdwp.initialize();
 
@@ -27,6 +39,18 @@ class TestPyjdbPackage(unittest.TestCase):
         self.test_target_subprocess.send_signal(signal.SIGKILL)
         self.test_target_subprocess.wait()
         self.devnull.close()
+
+class VirtualMachineTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class VirtualMachineTest {
+          public static void main(String[] args) throws Exception {
+            System.out.println("Hello");
+          }
+        }"""
+        cls.debug_target_main_class = "VirtualMachineTest"
+        super(VirtualMachineTest, cls).setUpClass()
 
     def test_virtual_machine_version(self):
         system_java_version = subprocess.check_output(
@@ -209,215 +233,227 @@ class TestPyjdbPackage(unittest.TestCase):
 
     def test_virtual_machine_all_classes_with_generic(self):
         resp = self.jdwp.VirtualMachine.AllClassesWithGeneric()
-        print(resp)
         pass
 
     def test_virtual_machine_instance_counts(self):
         pass
 
+class ReferenceTypeTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class ReferenceTypeTest {
+          public static void main(String[] args) {
+          }
+        }
+        """
+        cls.debug_target_main_class = "ReferenceTypeTest"
+        super(ReferenceTypeTest, cls).setUpClass()
+
     def test_reference_type_signature(self):
+        print("okay!")
         pass
 
-    def test_reference_type_class_loader(self):
-        pass
+    #def test_reference_type_class_loader(self):
+    #    pass
 
-    def test_reference_type_modifiers(self):
-        pass
+    #def test_reference_type_modifiers(self):
+    #    pass
 
-    def test_reference_type_fields(self):
-        pass
+    #def test_reference_type_fields(self):
+    #    pass
 
-    def test_reference_type_methods(self):
-        pass
+    #def test_reference_type_methods(self):
+    #    pass
 
-    def test_reference_type_get_values(self):
-        pass
+    #def test_reference_type_get_values(self):
+    #    pass
 
-    def test_reference_type_source_file(self):
-        pass
+    #def test_reference_type_source_file(self):
+    #    pass
 
-    def test_reference_type_nested_types(self):
-        pass
+    #def test_reference_type_nested_types(self):
+    #    pass
 
-    def test_reference_type_status(self):
-        pass
+    #def test_reference_type_status(self):
+    #    pass
 
-    def test_reference_type_interfaces(self):
-        pass
+    #def test_reference_type_interfaces(self):
+    #    pass
 
-    def test_reference_type_class_object(self):
-        pass
+    #def test_reference_type_class_object(self):
+    #    pass
 
-    def test_reference_type_source_debug_extension(self):
-        pass
+    #def test_reference_type_source_debug_extension(self):
+    #    pass
 
-    def test_reference_type_signature_with_generic(self):
-        pass
+    #def test_reference_type_signature_with_generic(self):
+    #    pass
 
-    def test_reference_type_fields_with_generic(self):
-        pass
+    #def test_reference_type_fields_with_generic(self):
+    #    pass
 
-    def test_reference_type_methods_with_generic(self):
-        pass
+    #def test_reference_type_methods_with_generic(self):
+    #    pass
 
-    def test_reference_type_instances(self):
-        pass
+    #def test_reference_type_instances(self):
+    #    pass
 
-    def test_reference_type_class_file_version(self):
-        pass
+    #def test_reference_type_class_file_version(self):
+    #    pass
 
-    def test_reference_type_constant_pool(self):
-        pass
+    #def test_reference_type_constant_pool(self):
+    #    pass
 
-    def test_class_type_superclass(self):
-        pass
+    #def test_class_type_superclass(self):
+    #    pass
 
-    def test_class_type_set_values(self):
-        pass
+    #def test_class_type_set_values(self):
+    #    pass
 
-    def test_class_type_invoke_method(self):
-        pass
+    #def test_class_type_invoke_method(self):
+    #    pass
 
-    def test_class_type_new_instance(self):
-        pass
+    #def test_class_type_new_instance(self):
+    #    pass
 
-    def test_array_type_new_instance(self):
-        pass
+    #def test_array_type_new_instance(self):
+    #    pass
 
-    def test_method_line_table(self):
-        pass
+    #def test_method_line_table(self):
+    #    pass
 
-    def test_method_variable_table(self):
-        pass
+    #def test_method_variable_table(self):
+    #    pass
 
-    def test_method_bytecodes(self):
-        pass
+    #def test_method_bytecodes(self):
+    #    pass
 
-    def test_method_is_obsolete(self):
-        pass
+    #def test_method_is_obsolete(self):
+    #    pass
 
-    def test_method_variable_table_with_generic(self):
-        pass
+    #def test_method_variable_table_with_generic(self):
+    #    pass
 
-    def test_object_reference_reference_type(self):
-        pass
+    #def test_object_reference_reference_type(self):
+    #    pass
 
-    def test_object_reference_get_values(self):
-        pass
+    #def test_object_reference_get_values(self):
+    #    pass
 
-    def test_object_reference_set_values(self):
-        pass
+    #def test_object_reference_set_values(self):
+    #    pass
 
-    def test_object_reference_monitor_info(self):
-        pass
+    #def test_object_reference_monitor_info(self):
+    #    pass
 
-    def test_object_reference_invoke_method(self):
-        pass
+    #def test_object_reference_invoke_method(self):
+    #    pass
 
-    def test_object_reference_disable_collection(self):
-        pass
+    #def test_object_reference_disable_collection(self):
+    #    pass
 
-    def test_object_reference_enable_collection(self):
-        pass
+    #def test_object_reference_enable_collection(self):
+    #    pass
 
-    def test_object_reference_is_collected(self):
-        pass
+    #def test_object_reference_is_collected(self):
+    #    pass
 
-    def test_object_reference_referring_objects(self):
-        pass
+    #def test_object_reference_referring_objects(self):
+    #    pass
 
-    def test_string_reference_value(self):
-        pass
+    #def test_string_reference_value(self):
+    #    pass
 
-    def test_thread_reference_name(self):
-        pass
+    #def test_thread_reference_name(self):
+    #    pass
 
-    def test_thread_reference_suspend(self):
-        pass
+    #def test_thread_reference_suspend(self):
+    #    pass
 
-    def test_thread_reference_resume(self):
-        pass
+    #def test_thread_reference_resume(self):
+    #    pass
 
-    def test_thread_reference_status(self):
-        pass
+    #def test_thread_reference_status(self):
+    #    pass
 
-    def test_thread_reference_thread_group(self):
-        pass
+    #def test_thread_reference_thread_group(self):
+    #    pass
 
-    def test_thread_reference_frames(self):
-        pass
+    #def test_thread_reference_frames(self):
+    #    pass
 
-    def test_thread_reference_frame_count(self):
-        pass
+    #def test_thread_reference_frame_count(self):
+    #    pass
 
-    def test_thread_reference_owned_monitors(self):
-        pass
+    #def test_thread_reference_owned_monitors(self):
+    #    pass
 
-    def test_thread_reference_current_contended_monitor(self):
-        pass
+    #def test_thread_reference_current_contended_monitor(self):
+    #    pass
 
-    def test_thread_reference_stop(self):
-        pass
+    #def test_thread_reference_stop(self):
+    #    pass
 
-    def test_thread_reference_interrupt(self):
-        pass
+    #def test_thread_reference_interrupt(self):
+    #    pass
 
-    def test_thread_reference_suspend_count(self):
-        pass
+    #def test_thread_reference_suspend_count(self):
+    #    pass
 
-    def test_thread_reference_owned_monitors_stack_depth_info(self):
-        pass
+    #def test_thread_reference_owned_monitors_stack_depth_info(self):
+    #    pass
 
-    def test_thread_reference_force_early_return(self):
-        pass
+    #def test_thread_reference_force_early_return(self):
+    #    pass
 
-    def test_thread_group_reference_name(self):
-        pass
+    #def test_thread_group_reference_name(self):
+    #    pass
 
-    def test_thread_group_reference_parent(self):
-        pass
+    #def test_thread_group_reference_parent(self):
+    #    pass
 
-    def test_thread_group_reference_children(self):
-        pass
+    #def test_thread_group_reference_children(self):
+    #    pass
 
-    def test_array_reference_length(self):
-        pass
+    #def test_array_reference_length(self):
+    #    pass
 
-    def test_array_reference_get_values(self):
-        pass
+    #def test_array_reference_get_values(self):
+    #    pass
 
-    def test_array_reference_set_values(self):
-        pass
+    #def test_array_reference_set_values(self):
+    #    pass
 
-    def test_class_loader_reference_visible_classes(self):
-        pass
+    #def test_class_loader_reference_visible_classes(self):
+    #    pass
 
-    def test_event_request_set(self):
-        pass
+    #def test_event_request_set(self):
+    #    pass
 
-    def test_event_request_clear(self):
-        pass
+    #def test_event_request_clear(self):
+    #    pass
 
-    def test_event_request_clear_all_breakpoints(self):
-        pass
+    #def test_event_request_clear_all_breakpoints(self):
+    #    pass
 
-    def test_stack_frame_get_values(self):
-        pass
+    #def test_stack_frame_get_values(self):
+    #    pass
 
-    def test_stack_frame_set_values(self):
-        pass
+    #def test_stack_frame_set_values(self):
+    #    pass
 
-    def test_stack_frame_this_object(self):
-        pass
+    #def test_stack_frame_this_object(self):
+    #    pass
 
-    def test_stack_frame_pop_frames	(self):
-        pass
+    #def test_stack_frame_pop_frames	(self):
+    #    pass
 
-    def test_class_object_reference_reflected_type(self):
-        pass
+    #def test_class_object_reference_reflected_type(self):
+    #    pass
 
-    def test_event_composite(self):
-        pass
+    #def test_event_composite(self):
+    #    pass
 
 if __name__ == "__main__":
   unittest.main()

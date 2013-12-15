@@ -10,6 +10,11 @@ import unittest
 TEST_TMP_DIRNAME = tempfile.mkdtemp()
 
 class PyjdbTestBase(unittest.TestCase):
+    """Base class for pyjdb package tests.
+    
+    Handles the work of compiling the test code once for each test class, and
+    starting the java process for each test case"""
+
     @classmethod
     def setUpClass(cls):
         test_source_filename = "%s.java" % cls.debug_target_main_class
@@ -86,6 +91,7 @@ class VirtualMachineTest(PyjdbTestBase):
     def test_virtual_machine_all_classes(self):
         all_classes_response = self.jdwp.VirtualMachine.AllClasses()
         self.assertTrue(all_classes_response["classes"] != None)
+        print(all_classes_response)
         string_class = [ x for x in all_classes_response["classes"] if
             x["signature"] == u"Ljava/lang/String;" ]
         self.assertEquals(len(string_class), 1)
@@ -243,31 +249,83 @@ class ReferenceTypeTest(PyjdbTestBase):
     def setUpClass(cls):
         cls.debug_target_code = """
         public class ReferenceTypeTest {
-          public static void main(String[] args) {
+          public static final Thing thing = new Thing();
+          public static void main(String[] args) throws Exception {
+            // block indefinitely so we can inspect program state
+            thing.wait();
           }
+        }
+
+        class Thing {
+          private int someNumber = 5;
+          private String someString = "asdf";
         }
         """
         cls.debug_target_main_class = "ReferenceTypeTest"
         super(ReferenceTypeTest, cls).setUpClass()
 
     def test_reference_type_signature(self):
-        print("okay!")
-        pass
+        classes = self.jdwp.VirtualMachine.AllClasses()
+        for class_entry in classes["classes"]:
+            signature = class_entry["signature"]
+            resp = self.jdwp.ReferenceType.Signature({
+                "refType": class_entry["typeID"]})
+            self.assertEquals(signature, resp["signature"])
 
-    #def test_reference_type_class_loader(self):
-    #    pass
+    def test_reference_type_class_loader(self):
+        classes = self.jdwp.VirtualMachine.AllClasses()
+        for class_entry in classes["classes"]:
+            resp = self.jdwp.ReferenceType.ClassLoader({
+                "refType": class_entry["typeID"]})
+            self.assertTrue("classLoader" in resp)
 
-    #def test_reference_type_modifiers(self):
-    #    pass
+    def test_reference_type_modifiers(self):
+        classes = self.jdwp.VirtualMachine.AllClasses()
+        for class_entry in classes["classes"]:
+            signature = class_entry["signature"]
+            resp = self.jdwp.ReferenceType.Modifiers({
+                "refType": class_entry["typeID"]})
+            self.assertTrue("modBits" in resp)
 
-    #def test_reference_type_fields(self):
-    #    pass
+    def test_reference_type_fields(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/String;"})
+        string_class_id = classes_by_sig["classes"][0]["typeID"]
+        resp = self.jdwp.ReferenceType.Fields({"refType": string_class_id})
+        for field_entry in resp["declared"]:
+            self.assertTrue("modBits" in field_entry)
+            self.assertTrue("fieldID" in field_entry)
+            self.assertTrue("name" in field_entry)
+            self.assertTrue("signature" in field_entry)
 
-    #def test_reference_type_methods(self):
-    #    pass
+    def test_reference_type_methods(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/String;"})
+        string_class_id = classes_by_sig["classes"][0]["typeID"]
+        resp = self.jdwp.ReferenceType.Methods({
+            "refType": string_class_id})
+        for method_entry in resp["declared"]:
+            self.assertTrue("modBits" in method_entry)
+            self.assertTrue("methodID" in method_entry)
+            self.assertTrue("name" in method_entry)
+            self.assertTrue("signature" in method_entry)
 
-    #def test_reference_type_get_values(self):
-    #    pass
+    def test_reference_type_get_values(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Integer;"})
+        self.assertTrue("classes" in classes_by_sig)
+        self.assertTrue(len(classes_by_sig["classes"]) > 0)
+        integer_class_id = classes_by_sig["classes"][0]["typeID"]
+        field_resp = self.jdwp.ReferenceType.Fields({"refType": integer_class_id})
+        field_ids = []
+        for field_entry in field_resp["declared"]:
+            field_ids.append({"fieldID": field_entry["fieldID"]})
+        print(field_ids)
+        get_values_resp = self.jdwp.ReferenceType.GetValues({
+            "refType": integer_class_id,
+            "fields": field_ids})
+        print(get_values_resp)
+
 
     #def test_reference_type_source_file(self):
     #    pass
@@ -456,4 +514,4 @@ class ReferenceTypeTest(PyjdbTestBase):
     #    pass
 
 if __name__ == "__main__":
-  unittest.main()
+    unittest.main()

@@ -18,6 +18,25 @@ def debug_string(obj):
 
 
 class Jdwp(object):
+    ACCESS_MODIFIER_PUBLIC = 0x0001
+    ACCESS_MODIFIER_FINAL = 0x0010
+    ACCESS_MODIFIER_SUPER = 0x0020 # old invokespecial instruction semantics (Java 1.0x?)
+    ACCESS_MODIFIER_INTERFACE = 0x0200
+    ACCESS_MODIFIER_ABSTRACT = 0x0400
+    ACCESS_MODIFIER_SYNTHETIC = 0x1000 
+    ACCESS_MODIFIER_ANNOTATION = 0x2000
+    ACCESS_MODIFIER_ENUM = 0x4000
+    ACCESS_MODIFIERS = {
+        0x0001: "public",
+        0x0010: "final",
+        0x0020: "super",
+        0x0200: "interface",
+        0x0400: "abstract",
+        0x1000: "synthetic",
+        0x2000: "annotation",
+        0x4000: "enum"
+    }
+
     def __init__(self, host="localhost", jvm_port=5005, event_cb=None):
         self.__jdwp_spec = JdwpSpec()
         self.__jdwp_connection = JdwpConnection(
@@ -283,6 +302,7 @@ class JdwpSpec(object):
             "stringID":    lambda id_sizes: id_sizes['objectIDSize'],
             "stringObject":    lambda id_sizes: id_sizes['objectIDSize'],
             "classLoaderID":    lambda id_sizes: id_sizes['objectIDSize'],
+            "classLoaderObject":    lambda id_sizes: id_sizes['objectIDSize'],
             "classObjectID":    lambda id_sizes: id_sizes['objectIDSize'],
             "arrayID":    lambda id_sizes: id_sizes['objectIDSize'],
             "referenceType":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
@@ -292,6 +312,7 @@ class JdwpSpec(object):
             "arrayTypeID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
             "method":    lambda id_sizes: id_sizes['methodIDSize'],
             "methodID":    lambda id_sizes: id_sizes['methodIDSize'],
+            "field":    lambda id_sizes: id_sizes['fieldIDSize'],
             "fieldID":    lambda id_sizes: id_sizes['fieldIDSize'],
             "frameID":    lambda id_sizes: id_sizes['frameIDSize'] }
         return lookup_fns_by_type[type_name](self.id_sizes)

@@ -17,6 +17,14 @@ class PyjdbTestBase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if not hasattr(cls, "debug_target_code"):
+            cls.debug_target_code = """
+            public class PyjdbTest {
+              public static void main(String[] args) {
+              }
+            }
+            """
+            cls.debug_target_main_class = "PyjdbTest"
         test_source_filename = "%s.java" % cls.debug_target_main_class
         test_class_filename = "%s.class" % cls.debug_target_main_class
         test_source_filepath = os.path.join(TEST_TMP_DIRNAME, test_source_filename)
@@ -46,17 +54,6 @@ class PyjdbTestBase(unittest.TestCase):
         self.devnull.close()
 
 class VirtualMachineTest(PyjdbTestBase):
-    @classmethod
-    def setUpClass(cls):
-        cls.debug_target_code = """
-        public class VirtualMachineTest {
-          public static void main(String[] args) throws Exception {
-            System.out.println("Hello");
-          }
-        }"""
-        cls.debug_target_main_class = "VirtualMachineTest"
-        super(VirtualMachineTest, cls).setUpClass()
-
     def test_virtual_machine_version(self):
         system_java_version = subprocess.check_output(
             "java -version 2>&1", shell=True)
@@ -78,37 +75,36 @@ class VirtualMachineTest(PyjdbTestBase):
         resp = self.jdwp.VirtualMachine.ClassesBySignature({
             "signature": u"Ljava/lang/String;"})
         # {'classes': [{'status': 7, 'typeID': 2, 'refTypeTag': 1}]}
-        self.assertTrue("classes" in resp)
-        self.assertTrue(len(resp["classes"]) > 0)
-        self.assertTrue("status" in resp["classes"][0])
-        self.assertTrue("typeID" in resp["classes"][0])
-        self.assertTrue("refTypeTag" in resp["classes"][0])
+        self.assertIn("classes", resp)
+        self.assertGreater(len(resp["classes"]), 0)
+        self.assertIn("status", resp["classes"][0])
+        self.assertIn("typeID", resp["classes"][0])
+        self.assertIn("refTypeTag", resp["classes"][0])
         resp = self.jdwp.VirtualMachine.ClassesBySignature({
             "signature": u"asdf1234"})
-        self.assertTrue("classes" in resp)
+        self.assertIn("classes", resp)
         self.assertEquals(0, len(resp["classes"]))
 
     def test_virtual_machine_all_classes(self):
         all_classes_response = self.jdwp.VirtualMachine.AllClasses()
-        self.assertTrue(all_classes_response["classes"] != None)
-        print(all_classes_response)
+        self.assertIn("classes", all_classes_response)
         string_class = [ x for x in all_classes_response["classes"] if
             x["signature"] == u"Ljava/lang/String;" ]
         self.assertEquals(len(string_class), 1)
 
     def test_virtual_machine_all_threads(self):
         resp = self.jdwp.VirtualMachine.AllThreads()
-        self.assertTrue("threads" in resp)
-        self.assertTrue(len(resp["threads"]) > 0)
-        self.assertTrue("thread" in resp["threads"][0])
-        self.assertTrue(isinstance(resp["threads"][0]["thread"], int))
+        self.assertIn("threads", resp)
+        self.assertGreater(len(resp["threads"]), 0)
+        self.assertIn("thread", resp["threads"][0])
+        self.assertIsInstance(resp["threads"][0]["thread"], int)
 
     def test_virtual_machine_top_level_thread_groups(self):
         resp = self.jdwp.VirtualMachine.TopLevelThreadGroups()
-        self.assertTrue("groups" in resp)
-        self.assertTrue(len(resp["groups"]) > 0)
-        self.assertTrue("group" in resp["groups"][0])
-        self.assertTrue(isinstance(resp["groups"][0]["group"], int))
+        self.assertIn("groups", resp)
+        self.assertGreater(len(resp["groups"]), 0)
+        self.assertIn("group", resp["groups"][0])
+        self.assertIsInstance(resp["groups"][0]["group"], int)
 
     def test_virtual_machine_dispose(self):
         # TODO(cgs): test that this actually disposes?
@@ -122,11 +118,11 @@ class VirtualMachineTest(PyjdbTestBase):
 
     def test_virtual_machine_id_sizes(self):
         resp = self.jdwp.VirtualMachine.IDSizes()
-        self.assertTrue("fieldIDSize" in resp)
-        self.assertTrue("methodIDSize" in resp)
-        self.assertTrue("objectIDSize" in resp)
-        self.assertTrue("referenceTypeIDSize" in resp)
-        self.assertTrue("frameIDSize" in resp)
+        self.assertIn("fieldIDSize", resp)
+        self.assertIn("methodIDSize", resp)
+        self.assertIn("objectIDSize", resp)
+        self.assertIn("referenceTypeIDSize", resp)
+        self.assertIn("frameIDSize", resp)
 
     def test_virtual_machine_suspend(self):
         resp = self.jdwp.VirtualMachine.Suspend()
@@ -147,26 +143,26 @@ class VirtualMachineTest(PyjdbTestBase):
     def test_virtual_machine_create_string(self):
         resp = self.jdwp.VirtualMachine.CreateString({
             "utf": "This is a test string!"})
-        self.assertTrue("stringObject" in resp)
+        self.assertIn("stringObject", resp)
 
     def test_virtual_machine_capabilities(self):
         resp = self.jdwp.VirtualMachine.Capabilities()
-        self.assertTrue("canWatchFieldModification" in resp)
-        self.assertTrue("canWatchFieldAccess" in resp)
-        self.assertTrue("canGetBytecodes" in resp)
-        self.assertTrue("canGetSyntheticAttribute" in resp)
-        self.assertTrue("canGetOwnedMonitorInfo" in resp)
-        self.assertTrue("canGetCurrentContendedMonitor" in resp)
-        self.assertTrue("canGetMonitorInfo" in resp)
+        self.assertIn("canWatchFieldModification", resp)
+        self.assertIn("canWatchFieldAccess", resp)
+        self.assertIn("canGetBytecodes", resp)
+        self.assertIn("canGetSyntheticAttribute", resp)
+        self.assertIn("canGetOwnedMonitorInfo", resp)
+        self.assertIn("canGetCurrentContendedMonitor", resp)
+        self.assertIn("canGetMonitorInfo", resp)
 
     def test_virtual_machine_class_paths(self):
         resp = self.jdwp.VirtualMachine.ClassPaths()
-        self.assertTrue("classpaths" in resp)
-        self.assertTrue("bootclasspaths" in resp)
-        self.assertTrue(len(resp["classpaths"]) > 0)
-        self.assertTrue(len(resp["bootclasspaths"]) > 0)
-        self.assertTrue("path" in resp["classpaths"][0])
-        self.assertTrue("path" in resp["bootclasspaths"][0])
+        self.assertIn("classpaths", resp)
+        self.assertIn("bootclasspaths", resp)
+        self.assertGreater(len(resp["classpaths"]), 0)
+        self.assertGreater(len(resp["bootclasspaths"]), 0)
+        self.assertIn("path", resp["classpaths"][0])
+        self.assertIn("path", resp["bootclasspaths"][0])
 
     def test_virtual_machine_dispose_objects(self):
         # create a string object
@@ -191,38 +187,38 @@ class VirtualMachineTest(PyjdbTestBase):
 
     def test_virtual_machine_capabilities_new(self):
         resp = self.jdwp.VirtualMachine.CapabilitiesNew()
-        self.assertTrue("canWatchFieldModification" in resp)
-        self.assertTrue("canWatchFieldAccess" in resp)
-        self.assertTrue("canGetBytecodes" in resp)
-        self.assertTrue("canGetSyntheticAttribute" in resp)
-        self.assertTrue("canGetOwnedMonitorInfo" in resp)
-        self.assertTrue("canGetCurrentContendedMonitor" in resp)
-        self.assertTrue("canGetMonitorInfo" in resp)
-        self.assertTrue("canRedefineClasses" in resp)
-        self.assertTrue("canAddMethod" in resp)
-        self.assertTrue("canUnrestrictedlyRedefineClasses" in resp)
-        self.assertTrue("canPopFrames" in resp)
-        self.assertTrue("canUseInstanceFilters" in resp)
-        self.assertTrue("canGetSourceDebugExtension" in resp)
-        self.assertTrue("canRequestVMDeathEvent" in resp)
-        self.assertTrue("canSetDefaultStratum" in resp)
-        self.assertTrue("canGetInstanceInfo" in resp)
-        self.assertTrue("canRequestMonitorEvents" in resp)
-        self.assertTrue("canGetMonitorFrameInfo" in resp)
-        self.assertTrue("canUseSourceNameFilters" in resp)
-        self.assertTrue("canGetConstantPool" in resp)
-        self.assertTrue("canForceEarlyReturn" in resp)
-        self.assertTrue("reserved22" in resp)
-        self.assertTrue("reserved23" in resp)
-        self.assertTrue("reserved24" in resp)
-        self.assertTrue("reserved25" in resp)
-        self.assertTrue("reserved26" in resp)
-        self.assertTrue("reserved27" in resp)
-        self.assertTrue("reserved28" in resp)
-        self.assertTrue("reserved29" in resp)
-        self.assertTrue("reserved30" in resp)
-        self.assertTrue("reserved31" in resp)
-        self.assertTrue("reserved32" in resp)
+        self.assertIn("canWatchFieldModification", resp)
+        self.assertIn("canWatchFieldAccess", resp)
+        self.assertIn("canGetBytecodes", resp)
+        self.assertIn("canGetSyntheticAttribute", resp)
+        self.assertIn("canGetOwnedMonitorInfo", resp)
+        self.assertIn("canGetCurrentContendedMonitor", resp)
+        self.assertIn("canGetMonitorInfo", resp)
+        self.assertIn("canRedefineClasses", resp)
+        self.assertIn("canAddMethod", resp)
+        self.assertIn("canUnrestrictedlyRedefineClasses", resp)
+        self.assertIn("canPopFrames", resp)
+        self.assertIn("canUseInstanceFilters", resp)
+        self.assertIn("canGetSourceDebugExtension", resp)
+        self.assertIn("canRequestVMDeathEvent", resp)
+        self.assertIn("canSetDefaultStratum", resp)
+        self.assertIn("canGetInstanceInfo", resp)
+        self.assertIn("canRequestMonitorEvents", resp)
+        self.assertIn("canGetMonitorFrameInfo", resp)
+        self.assertIn("canUseSourceNameFilters", resp)
+        self.assertIn("canGetConstantPool", resp)
+        self.assertIn("canForceEarlyReturn", resp)
+        self.assertIn("reserved22", resp)
+        self.assertIn("reserved23", resp)
+        self.assertIn("reserved24", resp)
+        self.assertIn("reserved25", resp)
+        self.assertIn("reserved26", resp)
+        self.assertIn("reserved27", resp)
+        self.assertIn("reserved28", resp)
+        self.assertIn("reserved29", resp)
+        self.assertIn("reserved30", resp)
+        self.assertIn("reserved31", resp)
+        self.assertIn("reserved32", resp)
 
     def test_virtual_machine_redefine_classes(self):
         # TODO(cgs): test this (we aim eventually to be able to compile
@@ -239,31 +235,13 @@ class VirtualMachineTest(PyjdbTestBase):
 
     def test_virtual_machine_all_classes_with_generic(self):
         resp = self.jdwp.VirtualMachine.AllClassesWithGeneric()
+        self.assertIsNotNone(resp)
         pass
 
     def test_virtual_machine_instance_counts(self):
         pass
 
 class ReferenceTypeTest(PyjdbTestBase):
-    @classmethod
-    def setUpClass(cls):
-        cls.debug_target_code = """
-        public class ReferenceTypeTest {
-          public static final Thing thing = new Thing();
-          public static void main(String[] args) throws Exception {
-            // block indefinitely so we can inspect program state
-            thing.wait();
-          }
-        }
-
-        class Thing {
-          private int someNumber = 5;
-          private String someString = "asdf";
-        }
-        """
-        cls.debug_target_main_class = "ReferenceTypeTest"
-        super(ReferenceTypeTest, cls).setUpClass()
-
     def test_reference_type_signature(self):
         classes = self.jdwp.VirtualMachine.AllClasses()
         for class_entry in classes["classes"]:
@@ -277,7 +255,7 @@ class ReferenceTypeTest(PyjdbTestBase):
         for class_entry in classes["classes"]:
             resp = self.jdwp.ReferenceType.ClassLoader({
                 "refType": class_entry["typeID"]})
-            self.assertTrue("classLoader" in resp)
+            self.assertIn("classLoader", resp)
 
     def test_reference_type_modifiers(self):
         classes = self.jdwp.VirtualMachine.AllClasses()
@@ -285,7 +263,7 @@ class ReferenceTypeTest(PyjdbTestBase):
             signature = class_entry["signature"]
             resp = self.jdwp.ReferenceType.Modifiers({
                 "refType": class_entry["typeID"]})
-            self.assertTrue("modBits" in resp)
+            self.assertIn("modBits", resp)
 
     def test_reference_type_fields(self):
         classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
@@ -293,10 +271,10 @@ class ReferenceTypeTest(PyjdbTestBase):
         string_class_id = classes_by_sig["classes"][0]["typeID"]
         resp = self.jdwp.ReferenceType.Fields({"refType": string_class_id})
         for field_entry in resp["declared"]:
-            self.assertTrue("modBits" in field_entry)
-            self.assertTrue("fieldID" in field_entry)
-            self.assertTrue("name" in field_entry)
-            self.assertTrue("signature" in field_entry)
+            self.assertIn("modBits", field_entry)
+            self.assertIn("fieldID", field_entry)
+            self.assertIn("name", field_entry)
+            self.assertIn("signature", field_entry)
 
     def test_reference_type_methods(self):
         classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
@@ -305,213 +283,394 @@ class ReferenceTypeTest(PyjdbTestBase):
         resp = self.jdwp.ReferenceType.Methods({
             "refType": string_class_id})
         for method_entry in resp["declared"]:
-            self.assertTrue("modBits" in method_entry)
-            self.assertTrue("methodID" in method_entry)
-            self.assertTrue("name" in method_entry)
-            self.assertTrue("signature" in method_entry)
+            self.assertIn("modBits", method_entry)
+            self.assertIn("methodID", method_entry)
+            self.assertIn("name", method_entry)
+            self.assertIn("signature", method_entry)
 
     def test_reference_type_get_values(self):
+        # TODO(cgs): add more value types; verify edge cases of signed/unsigned
+        # integer types, etc.
         classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
             "signature": u"Ljava/lang/Integer;"})
-        self.assertTrue("classes" in classes_by_sig)
-        self.assertTrue(len(classes_by_sig["classes"]) > 0)
+        self.assertIn("classes", classes_by_sig)
+        self.assertGreater(len(classes_by_sig["classes"]), 0)
         integer_class_id = classes_by_sig["classes"][0]["typeID"]
-        field_resp = self.jdwp.ReferenceType.Fields({"refType": integer_class_id})
+        fields_resp = self.jdwp.ReferenceType.Fields({
+                "refType": integer_class_id})
+        fields = fields_resp["declared"]
         field_ids = []
-        for field_entry in field_resp["declared"]:
-            field_ids.append({"fieldID": field_entry["fieldID"]})
-        print(field_ids)
+        for field in fields:
+            if field["name"] == "MIN_VALUE":
+                field_ids.append({"fieldID": field["fieldID"]})
+            elif field["name"] == "MAX_VALUE":
+                field_ids.append({"fieldID": field["fieldID"]})
         get_values_resp = self.jdwp.ReferenceType.GetValues({
             "refType": integer_class_id,
             "fields": field_ids})
-        print(get_values_resp)
+        values = [entry["value"] for entry in get_values_resp["values"]]
+        self.assertIn(-2147483648, values)
+        self.assertIn(2147483647, values)
 
+    def test_reference_type_source_file(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Integer;"})
+        self.assertIn("classes", classes_by_sig)
+        self.assertGreater(len(classes_by_sig["classes"]), 0)
+        integer_class_id = classes_by_sig["classes"][0]["typeID"]
+        source_file_resp = self.jdwp.ReferenceType.SourceFile({
+                "refType": integer_class_id})
+        self.assertEquals("Integer.java", source_file_resp["sourceFile"])
 
-    #def test_reference_type_source_file(self):
-    #    pass
+    def test_reference_type_nested_types(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Thread;"})
+        self.assertIn("classes", classes_by_sig)
+        self.assertGreater(len(classes_by_sig["classes"]), 0)
+        thread_class_id = classes_by_sig["classes"][0]["typeID"]
+        nested_types_resp = self.jdwp.ReferenceType.NestedTypes({
+                "refType": thread_class_id})
+        classes = nested_types_resp["classes"]
+        exception_sig = "Ljava/lang/Thread$UncaughtExceptionHandler;"
+        for cls in classes:
+            self.assertIn("typeID", cls)
+            self.assertIn("refTypeTag", cls)
 
-    #def test_reference_type_nested_types(self):
-    #    pass
+    def test_reference_type_status(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Thread;"})
+        self.assertIn("classes", classes_by_sig)
+        self.assertGreater(len(classes_by_sig["classes"]), 0)
+        thread_class_id = classes_by_sig["classes"][0]["typeID"]
+        status_resp = self.jdwp.ReferenceType.Status({
+                "refType": thread_class_id})
+        self.assertIn("status", status_resp)
+        self.assertIsInstance(status_resp["status"], int)
 
-    #def test_reference_type_status(self):
-    #    pass
+    def test_reference_type_interfaces(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Thread;"})
+        self.assertIn("classes", classes_by_sig)
+        self.assertGreater(len(classes_by_sig["classes"]), 0)
+        thread_class_id = classes_by_sig["classes"][0]["typeID"]
+        interfaces_resp = self.jdwp.ReferenceType.Interfaces({
+            "refType": thread_class_id})
+        signatures = []
+        for interface in interfaces_resp["interfaces"]:
+            ref_type_signature = self.jdwp.ReferenceType.Signature({
+                "refType": interface["interfaceType"]})
+            signatures.append(ref_type_signature["signature"])
+        self.assertIn(u"Ljava/lang/Runnable;", signatures)
 
-    #def test_reference_type_interfaces(self):
-    #    pass
+    def test_reference_type_class_object(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Thread;"})
+        thread_class_id = classes_by_sig["classes"][0]["typeID"]
+        class_object_resp = self.jdwp.ReferenceType.ClassObject({
+                "refType": thread_class_id})
+        self.assertIn("classObject", class_object_resp)
+        self.assertIsInstance(class_object_resp["classObject"], int)
 
-    #def test_reference_type_class_object(self):
-    #    pass
+    def test_reference_type_source_debug_extension(self):
+        # not clear whether this is implemented or useful. jsr045
+        pass
 
-    #def test_reference_type_source_debug_extension(self):
-    #    pass
+    def test_reference_type_signature_with_generic(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/util/List;"})
+        list_class_id = classes_by_sig["classes"][0]["typeID"]
+        signature_with_generic_resp = self.jdwp.ReferenceType.SignatureWithGeneric({
+                "refType": list_class_id})
+        self.assertIn("genericSignature", signature_with_generic_resp)
+        self.assertIn("signature", signature_with_generic_resp)
 
-    #def test_reference_type_signature_with_generic(self):
-    #    pass
+    def test_reference_type_fields_with_generic(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/util/ArrayList;"})
+        arraylist_class_id = classes_by_sig["classes"][0]["typeID"]
+        fields_with_generic_resp = self.jdwp.ReferenceType.FieldsWithGeneric({
+                "refType": arraylist_class_id})
+        self.assertIn("declared", fields_with_generic_resp)
+        self.assertGreater(len(fields_with_generic_resp["declared"]), 0)
+        for field in fields_with_generic_resp["declared"]:
+            self.assertIn("genericSignature", field)
+            self.assertIn("fieldID", field)
+            self.assertIn("name", field)
+            self.assertIn("modBits", field)
+            self.assertIn("signature", field)
 
-    #def test_reference_type_fields_with_generic(self):
-    #    pass
+    def test_reference_type_methods_with_generic(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/util/ArrayList;"})
+        arraylist_class_id = classes_by_sig["classes"][0]["typeID"]
+        methods_with_generic_resp = self.jdwp.ReferenceType.MethodsWithGeneric({
+                "refType": arraylist_class_id})
+        self.assertIn("declared", methods_with_generic_resp)
+        self.assertGreater(len(methods_with_generic_resp["declared"]), 0)
+        for method in methods_with_generic_resp["declared"]:
+            self.assertIn("genericSignature", method)
+            self.assertIn("methodID", method)
+            self.assertIn("name", method)
+            self.assertIn("modBits", method)
+            self.assertIn("signature", method)
 
-    #def test_reference_type_methods_with_generic(self):
-    #    pass
+    def test_reference_type_instances(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Thread;"})
+        thread_class_id = classes_by_sig["classes"][0]["typeID"]
+        instances_resp = self.jdwp.ReferenceType.Instances({
+                "refType": thread_class_id,
+                "maxInstances": 0})
+        self.assertIn("instances", instances_resp)
+        self.assertGreater(len(instances_resp["instances"]), 0)
+        for instance in instances_resp["instances"]:
+            self.assertIn("instance", instance)
+            self.assertIn("tagType", instance["instance"])
+            self.assertIn("objectID", instance["instance"])
 
-    #def test_reference_type_instances(self):
-    #    pass
+    def test_reference_type_class_file_version(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Thread;"})
+        thread_class_id = classes_by_sig["classes"][0]["typeID"]
+        class_file_version_resp = self.jdwp.ReferenceType.ClassFileVersion({
+                "refType": thread_class_id})
+        self.assertIn("majorVersion", class_file_version_resp)
+        self.assertIsInstance(class_file_version_resp["majorVersion"], int)
+        self.assertIn("minorVersion", class_file_version_resp)
+        self.assertIsInstance(class_file_version_resp["minorVersion"], int)
 
-    #def test_reference_type_class_file_version(self):
-    #    pass
+    def test_reference_type_constant_pool(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Thread;"})
+        thread_class_id = classes_by_sig["classes"][0]["typeID"]
+        constant_pool_resp = self.jdwp.ReferenceType.ConstantPool({
+                "refType": thread_class_id})
+        self.assertIn("count", constant_pool_resp)
+        self.assertIn("bytes", constant_pool_resp)
+        self.assertGreater(len(constant_pool_resp["bytes"]), 0)
+        self.assertIn("cpbytes", constant_pool_resp["bytes"][0])
 
-    #def test_reference_type_constant_pool(self):
-    #    pass
+class ClassTypeTest(PyjdbTestBase):
+    def test_class_type_superclass(self):
+        classes_by_sig = self.jdwp.virtualmachine.classesbysignature({
+            "signature": u"ljava/lang/thread;"})
+        thread_class_id = classes_by_sig["classes"][0]["typeid"]
+        superclass_resp = self.jdwp.classtype.superclass({
+                "clazz": thread_class_id})
+        self.assertin("superclass", superclass_resp)
 
-    #def test_class_type_superclass(self):
-    #    pass
+    def test_class_type_set_values(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Integer;"})
+        self.assertIn("classes", classes_by_sig)
+        self.assertGreater(len(classes_by_sig["classes"]), 0)
+        integer_class_id = classes_by_sig["classes"][0]["typeID"]
+        fields_resp = self.jdwp.ReferenceType.Fields({
+                "refType": integer_class_id})
+        fields = fields_resp["declared"]
+        field_ids = []
+        for field in fields:
+            if field["name"] == "MIN_VALUE":
+                field_ids.append({"fieldID": field["fieldID"]})
+        get_values_resp = self.jdwp.ReferenceType.GetValues({
+            "refType": integer_class_id,
+            "fields": field_ids})
+        values = [entry["value"] for entry in get_values_resp["values"]]
+        self.assertIn(-2147483648, values)
+        set_values_resp = self.jdwp.ClassType.SetValues({
+                "clazz": integer_class_id,
+                "values": [{
+                        "fieldID": field_ids[0]["fieldID"],
+                        "value": {
+                                "tagType": self.jdwp.Tag.INT,
+                                "value": -2147483643}}]})
+        self.assertIsNotNone(set_values_resp)
+        get_values_resp = self.jdwp.ReferenceType.GetValues({
+            "refType": integer_class_id,
+            "fields": field_ids})
+        values = [entry["value"] for entry in get_values_resp["values"]]
+        self.assertIn(-2147483643, values)
 
-    #def test_class_type_set_values(self):
-    #    pass
+    def test_class_type_invoke_method(self):
+        # TODO(cgs): revisit this once event setting/catchin is well-tested
+        all_threads_resp = self.jdwp.VirtualMachine.AllThreads()
+        self.assertIn("threads", all_threads_resp)
+        self.assertGreater(len(all_threads_resp["threads"]), 0)
+        thread_id = all_threads_resp["threads"][2]["thread"]
 
-    #def test_class_type_invoke_method(self):
-    #    pass
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/System;"})
+        self.assertIn("classes", classes_by_sig)
+        self.assertGreater(len(classes_by_sig["classes"]), 0)
+        system_class_id = classes_by_sig["classes"][0]["typeID"]
+        methods_resp = self.jdwp.ReferenceType.Methods({
+            "refType": system_class_id})
+        for method_entry in methods_resp["declared"]:
+            if method_entry["name"] == u"currentTimeMillis":
+                current_time_millis_method_id = method_entry["methodID"]
+        self.assertIsNotNone(current_time_millis_method_id)
+        # TODO(cgs): fix this. as written, the below will cause an
+        # "INVALID_THREAD" error. we must first properly set and catch an
+        # event, then we can test invoation of static methods
+        #invocation_resp = self.jdwp.ClassType.InvokeMethod({
+        #        "clazz": system_class_id,
+        #        "thread": thread_id,
+        #        "methodID": current_time_millis_method_id,
+        #        "arguments": [],
+        #        "options": 1})
 
-    #def test_class_type_new_instance(self):
-    #    pass
+    def test_class_type_new_instance(self):
+        # TODO(cgs): as above, revisit after events tested
+        #classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+        #    "signature": u"Ljava/lang/Integer;"})
+        #self.assertIn("classes", classes_by_sig)
+        #self.assertGreater(len(classes_by_sig["classes"]), 0)
+        #integer_class_id = classes_by_sig["classes"][0]["typeID"]
+        #methods_resp = self.jdwp.ReferenceType.Methods({
+        #        "refType": integer_class_id})
+        #for method in methods_resp["declared"]:
+        #    if method["name"] == u"<init>" and method["signature"] == u"(I)V":
+        #        constructor_id = method["methodID"]
+        #self.assertIsNotNone(constructor_id)
+        pass
 
-    #def test_array_type_new_instance(self):
-    #    pass
+class ArrayTypeTest(PyjdbTestBase):
+    def test_array_type_new_instance(self):
+        all_classes_response = self.jdwp.VirtualMachine.AllClasses()
+        self.assertIn("classes", all_classes_response)
+        for cls in all_classes_response["classes"]:
+            if cls["signature"] == "[I":
+                int_array_type_id = cls["typeID"]
+        self.assertIsNotNone(int_array_type_id)
+        new_instance_resp = self.jdwp.ArrayType.NewInstance({
+                "arrType": int_array_type_id,
+                "length": 20000000})
+        self.assertIn("newArray", new_instance_resp)
+        self.assertIn("objectID", new_instance_resp["newArray"])
+        self.assertIn("tagType", new_instance_resp["newArray"])
 
-    #def test_method_line_table(self):
-    #    pass
+class MethodTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class MethodTest {
+            static Thing thing;
+            public static void main(String[] args) {
+                while (true);
+            }
+        }
 
-    #def test_method_variable_table(self):
-    #    pass
+        class Thing {
+            public int propertyA = 10;
+            public int propertyB = 20;
+
+            public int sum_of_squares() {
+                int propertyASquared = propertyA * propertyA;
+                int propertyBSquared = propertyB * propertyB;
+                int result = propertyASquared + propertyBSquared;
+                return result;
+            }
+        }
+        """
+        cls.debug_target_main_class = "MethodTest"
+        super(MethodTest, cls).setUpClass()
+
+    def test_method_line_table(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/String;"})
+        string_class_id = classes_by_sig["classes"][0]["typeID"]
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": string_class_id})
+
+        for method in methods_resp["declared"]:
+            if method["name"] == u"length":
+                length_method_id = method["methodID"]
+        self.assertIsNotNone(length_method_id)
+        line_table_resp = self.jdwp.Method.LineTable({
+                "refType": string_class_id,
+                "methodID": length_method_id})
+        self.assertIn("start", line_table_resp)
+        self.assertIn("end", line_table_resp)
+        self.assertIn("lines", line_table_resp)
+        self.assertGreater(len(line_table_resp["lines"]), 0)
+        for line in line_table_resp["lines"]:
+            self.assertIn("lineCodeIndex", line)
+            self.assertIsInstance(line["lineCodeIndex"], int)
+            self.assertIn("lineNumber", line)
+            self.assertIsInstance(line["lineNumber"], int)
+
+    def test_method_variable_table(self):
+        event_req_set_resp = self.jdwp.EventRequest.Set({
+                "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
+                "suspendPolicy": self.jdwp.SuspendPolicy.ALL,
+                "modifiers": []})
+        self.assertIsNotNone(event_req_set_resp)
+        self.jdwp.VirtualMachine.Resume()
+        def matcher(event_raw):
+            req_id, event_data = event_raw
+            for event in event_data["events"]:
+                if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
+                    print(event)
+                    return True
+            return False
+        _, test_class_prepare_event = self.jdwp.await_event(matcher)
+        print(test_class_prepare_event)
+
+        #all_classes_response = self.jdwp.VirtualMachine.AllClasses()
+        #for cls in all_classes_response["classes"]:
+        #    print(cls["signature"])
+        #for method in methods_resp["declared"]:
+        #    if method["name"] == u"length":
+        #        length_method_id = method["methodID"]
+        #self.assertIsNotNone(length_method_id)
+        #variable_table_resp = self.jdwp.Method.VariableTable({
+        #        "refType": string_class_id,
+        #        "methodID": length_method_id})
+        #print(variable_table_resp)
 
     #def test_method_bytecodes(self):
-    #    pass
-
     #def test_method_is_obsolete(self):
-    #    pass
-
     #def test_method_variable_table_with_generic(self):
-    #    pass
-
     #def test_object_reference_reference_type(self):
-    #    pass
-
     #def test_object_reference_get_values(self):
-    #    pass
-
     #def test_object_reference_set_values(self):
-    #    pass
-
     #def test_object_reference_monitor_info(self):
-    #    pass
-
     #def test_object_reference_invoke_method(self):
-    #    pass
-
     #def test_object_reference_disable_collection(self):
-    #    pass
-
     #def test_object_reference_enable_collection(self):
-    #    pass
-
     #def test_object_reference_is_collected(self):
-    #    pass
-
     #def test_object_reference_referring_objects(self):
-    #    pass
-
     #def test_string_reference_value(self):
-    #    pass
-
     #def test_thread_reference_name(self):
-    #    pass
-
     #def test_thread_reference_suspend(self):
-    #    pass
-
     #def test_thread_reference_resume(self):
-    #    pass
-
     #def test_thread_reference_status(self):
-    #    pass
-
     #def test_thread_reference_thread_group(self):
-    #    pass
-
     #def test_thread_reference_frames(self):
-    #    pass
-
     #def test_thread_reference_frame_count(self):
-    #    pass
-
     #def test_thread_reference_owned_monitors(self):
-    #    pass
-
     #def test_thread_reference_current_contended_monitor(self):
-    #    pass
-
     #def test_thread_reference_stop(self):
-    #    pass
-
     #def test_thread_reference_interrupt(self):
-    #    pass
-
     #def test_thread_reference_suspend_count(self):
-    #    pass
-
     #def test_thread_reference_owned_monitors_stack_depth_info(self):
-    #    pass
-
     #def test_thread_reference_force_early_return(self):
-    #    pass
-
     #def test_thread_group_reference_name(self):
-    #    pass
-
     #def test_thread_group_reference_parent(self):
-    #    pass
-
     #def test_thread_group_reference_children(self):
-    #    pass
-
     #def test_array_reference_length(self):
-    #    pass
-
     #def test_array_reference_get_values(self):
-    #    pass
-
     #def test_array_reference_set_values(self):
-    #    pass
-
     #def test_class_loader_reference_visible_classes(self):
-    #    pass
-
     #def test_event_request_set(self):
-    #    pass
-
     #def test_event_request_clear(self):
-    #    pass
-
     #def test_event_request_clear_all_breakpoints(self):
-    #    pass
-
     #def test_stack_frame_get_values(self):
-    #    pass
-
     #def test_stack_frame_set_values(self):
-    #    pass
-
     #def test_stack_frame_this_object(self):
-    #    pass
-
     #def test_stack_frame_pop_frames	(self):
-    #    pass
-
     #def test_class_object_reference_reflected_type(self):
-    #    pass
-
     #def test_event_composite(self):
-    #    pass
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,8 @@ class Error(Exception):
 
 EVENT_MAGIC_NUMBER = 0x4064
 
+STRUCT_FMTS_BY_SIZE_UNSIGNED = {1: "B", 4: "I", 8: "Q"}
+
 
 def debug_string(obj):
     from pprint import pprint
@@ -66,6 +68,7 @@ class Jdwp(object):
                 if matcher_fn(event):
                     found_event = event
                     break
+            self.__jdwp_connection.events.remove(event)
             self.__jdwp_connection.event_cv.release()
         return found_event
                 
@@ -97,30 +100,28 @@ class JdwpConnection(object):
         self.events = []
 
     def __handshake(self):
-        handshake = b'JDWP-Handshake'
+        handshake = b"JDWP-Handshake"
         self.__socket.send(handshake)
         data = self.__socket.recv(len(handshake))
         if data != handshake:
             self.__socket.close()
-            raise Error('Handshake failed')
+            raise Error("Handshake failed")
 
     def __await_vm_start(self):
         vm_start_event_header = self.__socket.recv(11);
-        length, _, _, _ = struct.unpack('>IIBH', vm_start_event_header)
+        length, _, _, _ = struct.unpack(">IIBH", vm_start_event_header)
         vm_start_event_data = self.__socket.recv(length - 11);
-        remainder_fmt = { 1: "B",
-                4: "I",
-                8: "Q" }[length - 11 - 10]
+        remainder_fmt = STRUCT_FMTS_BY_SIZE_UNSIGNED[length - 11 - 10]
         _, _, event_kind, _, _ = struct.unpack(
-                '>BIBI' + remainder_fmt, vm_start_event_data)
+                ">BIBI" + remainder_fmt, vm_start_event_data)
         if event_kind != 90:  # vm_start
             raise Error("I...i don't know")
 
     def __hardcoded_id_sizes_request(self):
         self.__socket.send(struct.pack(">IIBBB", 11, 0, 0, 1, 7))
         id_sizes_response_data = self.__socket.recv(31);
-        id_sizes_response = struct.unpack('>IIBHIIIII', id_sizes_response_data)
-        self.id_sizes = id_sizes_response[4:]
+        id_sizes_response = struct.unpack(">IIBHIIIII", id_sizes_response_data)
+        self.id_sizes = id_sizes_response[4 : ]
 
     def initialize(self):
         # open socket to jvm
@@ -206,27 +207,27 @@ class JdwpConnection(object):
         self.reply_cv.release()
 
     def __receive(self):
-        '''Reads header, flags, error code, and subsequent data from jdwp socket'''
+        """Reads header, flags, error code, and subsequent data from jdwp socket"""
         header = self.__socket.recv(11);
         if len(header) == 0:
-            return -1, 0, 0, ''
-        length, req_id, flags, err = struct.unpack('>IIBH', header)
+            return -1, 0, 0, ""
+        length, req_id, flags, err = struct.unpack(">IIBH", header)
         remaining = length - 11
         msg = bytearray()
         while remaining > 0:
             chunk = self.__socket.recv(min(remaining, 4096))
             msg.extend(chunk)
             remaining -= len(chunk)
-        reply_packed = ''.join([chr(x) for x in msg])
+        reply_packed = "".join([chr(x) for x in msg])
         return req_id, flags, err, reply_packed
 
     def __send_command_sync(self, cmd_set_id, cmd_id, request_bytes):
-        '''Synchronous wrapper around a call to __send_command_async'''
+        """Synchronous wrapper around a call to __send_command_async"""
         req_id = self.__send_command_async(cmd_set_id, cmd_id, request_bytes)
         return self.__get_reply(req_id)
 
     def __send_command_async(self, cmd_set_id, cmd_id, request_bytes = None):
-        '''Generate req_id and send command to jvm. Returns req_id'''
+        """Generate req_id and send command to jvm. Returns req_id"""
         if request_bytes is None:
             request_bytes = []
         req_id = self.__generate_req_id()
@@ -236,7 +237,7 @@ class JdwpConnection(object):
         return req_id
 
     def __get_reply(self, req_id):
-        '''Blocks until a reply is received for 'req_id'; returns err, reply'''
+        """Blocks until a reply is received for "req_id"; returns err, reply"""
         self.reply_cv.acquire()
         while req_id not in self.__replies_by_req_id:
             self.reply_cv.wait()
@@ -260,11 +261,11 @@ class JdwpSpec(object):
         self.constant_sets = {}
         self.id_sizes = {}
         for entry in self.__spec:
-            if entry[0] == 'ConstantSet':
+            if entry[0] == "ConstantSet":
                 constant_set = ConstantSet(entry)
                 self.constant_sets[constant_set.name] = constant_set
         for entry in self.__spec:
-            if entry[0] == 'CommandSet':
+            if entry[0] == "CommandSet":
                 command_set = CommandSet(self, entry)
                 self.command_sets[command_set.name] = command_set
 
@@ -287,42 +288,127 @@ class JdwpSpec(object):
         return constant_set.constants[constant_name]
 
     def lookup_id_size(self, type_name):
-        lookup_fns_by_type = {
+        lookup_fn_by_type = {
             "byte":    lambda id_sizes: 1,
             "boolean":    lambda id_sizes: 1,
             "int":    lambda id_sizes: 4,
             "long":    lambda id_sizes: 8,
-            "object":    lambda id_sizes: id_sizes['objectIDSize'],
-            "objectID":    lambda id_sizes: id_sizes['objectIDSize'],
-            "tagged-objectID":    lambda id_sizes: 1 + id_sizes['objectIDSize'],
-            "threadID":    lambda id_sizes: id_sizes['objectIDSize'],
-            "threadObject":    lambda id_sizes: id_sizes['objectIDSize'],
-            "threadGroupID":    lambda id_sizes: id_sizes['objectIDSize'],
-            "threadGroupObject":    lambda id_sizes: id_sizes['objectIDSize'],
-            "stringID":    lambda id_sizes: id_sizes['objectIDSize'],
-            "stringObject":    lambda id_sizes: id_sizes['objectIDSize'],
-            "classLoaderID":    lambda id_sizes: id_sizes['objectIDSize'],
-            "classLoaderObject":    lambda id_sizes: id_sizes['objectIDSize'],
-            "classObjectID":    lambda id_sizes: id_sizes['objectIDSize'],
-            "arrayID":    lambda id_sizes: id_sizes['objectIDSize'],
-            "referenceType":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "referenceTypeID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "classID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "interfaceID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "arrayTypeID":    lambda id_sizes: id_sizes['referenceTypeIDSize'],
-            "method":    lambda id_sizes: id_sizes['methodIDSize'],
-            "methodID":    lambda id_sizes: id_sizes['methodIDSize'],
-            "field":    lambda id_sizes: id_sizes['fieldIDSize'],
-            "fieldID":    lambda id_sizes: id_sizes['fieldIDSize'],
-            "frameID":    lambda id_sizes: id_sizes['frameIDSize'] }
-        return lookup_fns_by_type[type_name](self.id_sizes)
+            "object":    lambda id_sizes: id_sizes["objectIDSize"],
+            "objectID":    lambda id_sizes: id_sizes["objectIDSize"],
+            "threadID":    lambda id_sizes: id_sizes["objectIDSize"],
+            "threadObject":    lambda id_sizes: id_sizes["objectIDSize"],
+            "threadGroupID":    lambda id_sizes: id_sizes["objectIDSize"],
+            "threadGroupObject":    lambda id_sizes: id_sizes["objectIDSize"],
+            "stringID":    lambda id_sizes: id_sizes["objectIDSize"],
+            "stringObject":    lambda id_sizes: id_sizes["objectIDSize"],
+            "classLoaderID":    lambda id_sizes: id_sizes["objectIDSize"],
+            "classLoaderObject":    lambda id_sizes: id_sizes["objectIDSize"],
+            "classObjectID":    lambda id_sizes: id_sizes["objectIDSize"],
+            "arrayID":    lambda id_sizes: id_sizes["objectIDSize"],
+            "referenceType":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "referenceTypeID":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "classID":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "classType":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "classObject":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "interfaceID":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "interfaceType":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "arrayType":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "arrayTypeID":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "method":    lambda id_sizes: id_sizes["methodIDSize"],
+            "methodID":    lambda id_sizes: id_sizes["methodIDSize"],
+            "field":    lambda id_sizes: id_sizes["fieldIDSize"],
+            "fieldID":    lambda id_sizes: id_sizes["fieldIDSize"],
+            "frameID":    lambda id_sizes: id_sizes["frameIDSize"] }
+        return lookup_fn_by_type[type_name](self.id_sizes)
 
+    def lookup_value_size_by_tag_type(self, tag_type):
+        # These are copied from the *comments* of the TagType constant_set in
+        # the spec
+        lookup_fn_by_tag_type = {
+            '[': lambda id_sizes: id_sizes["objectIDSize"],  # ARRAY
+            'B': lambda id_sizes: 1,  # BYT E
+            'C': lambda id_sizes: 2,  # CHAR
+            'L': lambda id_sizes: id_sizes["objectIDSize"],  # OBJECT
+            'F': lambda id_sizes: 4,  # FLOAT
+            'D': lambda id_sizes: 8,  # DOUBLE
+            'I': lambda id_sizes: 4,  # INT
+            'J': lambda id_sizes: 8,  # LONG
+            'S': lambda id_sizes: 2,  # SHORT
+            'V': lambda id_sizes: 0,  # VOID
+            'Z': lambda id_sizes: 1,  # BOOLEAN
+            's': lambda id_sizes: id_sizes["objectIDSize"],  # STRING
+            't': lambda id_sizes: id_sizes["objectIDSize"],  # THREAD
+            'g': lambda id_sizes: id_sizes["objectIDSize"],  # THREAD_GROUP
+            'l': lambda id_sizes: id_sizes["objectIDSize"],  # CLASS_LOADER
+            'c': lambda id_sizes: id_sizes["objectIDSize"],  # CLASS_OBJECT
+        }
+        return lookup_fn_by_tag_type[tag_type](self.id_sizes)
+
+    def decode_value_bytes_for_tag_type(self, tag_type, value_bytes):
+        value_len = self.lookup_value_size_by_tag_type(tag_type)
+        decode_fn_by_tag_type = {
+            '[': lambda vb: struct.unpack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
+            'B': lambda vb: struct.unpack(">B", vb),
+            'C': lambda vb: chr(struct.unpack(">H", vb)),  # H = 2 byte ushort
+            'L': lambda vb, id_s: struct.unpack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # OBJECT
+            'F': lambda vb: struct.unpack(">f", vb),  # FLOAT
+            'D': lambda vb: struct.unpack(">d", vb),  # DOUBLE
+            'I': lambda vb: struct.unpack(">i", vb),  # INT
+            'J': lambda vb: struct.unpack(">q", vb),  # LONG
+            'S': lambda vb: struct.unpack(">h", vb),  # SHORT
+            'V': lambda vb: None,  # VOID
+            'Z': lambda vb: (struct.unpack(">B", vb) != 0),  # BOOLEAN
+            's': lambda vb: struct.unpack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # STRING
+            't': lambda vb: struct.unpack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # THREAD
+            'g': lambda vb: struct.unpack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # THREADGROUP
+            'l': lambda vb: struct.unpack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # CLASSLOADER
+            'c': lambda vb: struct.unpack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # CLASS
+        }
+        value = decode_fn_by_tag_type[tag_type](value_bytes[0 : value_len])[0],
+        return value[0]
+
+    def encode_value_bytes_for_tag_type(self, tag_type, value):
+        value_len = self.lookup_value_size_by_tag_type(tag_type)
+        encode_fn_by_tag_type = {
+            '[': lambda val: struct.pack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
+            'B': lambda val: struct.pack(">B", val),
+            'C': lambda val: chr(struct.pack(">H", val)),  # H = 2 byte ushort
+            'L': lambda val, id_s: struct.pack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # OBJECT
+            'F': lambda val: struct.pack(">f", val),  # FLOAT
+            'D': lambda val: struct.pack(">d", val),  # DOUBLE
+            'I': lambda val: struct.pack(">i", val),  # INT
+            'J': lambda val: struct.pack(">q", val),  # LONG
+            'S': lambda val: struct.pack(">h", val),  # SHORT
+            'V': lambda val: None,  # VOID
+            'Z': lambda val: (struct.pack(">B", val) != 0),  # BOOLEAN
+            's': lambda val: struct.pack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # STRING
+            't': lambda val: struct.pack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # THREAD
+            'g': lambda val: struct.pack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # THREADGROUP
+            'l': lambda val: struct.pack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # CLASSLOADER
+            'c': lambda val: struct.pack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # CLASS
+        }
+        value_bytes = encode_fn_by_tag_type[tag_type](value)
+        return value_bytes
 
 class ConstantSet(object):
     def __init__(self, constant_set):
         self.name = constant_set[1]
         self.constants = {}
-        for constant_entry in constant_set[2:]:
+        for constant_entry in constant_set[2 : ]:
             constant = Constant(constant_entry)
             self.constants[constant.name] = constant
 
@@ -332,6 +418,8 @@ class Constant(object):
         [self.name, value_str] = constant[1].split("=")
         if value_str.startswith("0x"):
             self.value = int(value_str, 16)
+        elif value_str.startswith("'"):
+            self.value = value_str.split("'")[1]
         else:
             try:
                 self.value = int(value_str)
@@ -345,7 +433,7 @@ class CommandSet(object):
         [self.name, self.id] = command_set[1].split("=")
         self.id = int(self.id)
         self.commands = {}
-        for command_entry in command_set[2:]:
+        for command_entry in command_set[2 : ]:
             command = Command(spec, self.id, command_entry)
             self.commands[command.name] = command
 
@@ -356,7 +444,7 @@ class Command(object):
         self.command_set_id = command_set_id
         [self.name, self.id] = command[1].split("=")
         self.id = int(self.id)
-        if command[2][0] == 'Event':
+        if command[2][0] == "Event":
             self.request = Request(spec, [])
             self.response = Response(spec, command[2])
             self.errors = []
@@ -375,10 +463,10 @@ class Command(object):
 def create_arg_from_spec(spec, arg):
     arg_type = arg[0]
     type_map = {
-            'Repeat': Repeat,
-            'Group': Group,
-            'Select': Select,
-            'location': Location}
+            "Repeat": Repeat,
+            "Group": Group,
+            "Select": Select,
+            "location": Location}
     if arg_type in type_map:
         return type_map[arg_type](spec, arg)
     else:
@@ -388,7 +476,7 @@ def create_arg_from_spec(spec, arg):
 class Request(object):
     def __init__(self, spec, request):
         self.spec = spec
-        self.args = [ create_arg_from_spec(spec, arg) for arg in request[1:] ]
+        self.args = [ create_arg_from_spec(spec, arg) for arg in request[1 : ] ]
 
     def encode(self, data):
         result = bytearray()
@@ -400,7 +488,7 @@ class Request(object):
 class Response(object):
     def __init__(self, spec, response):
         self.spec = spec
-        self.args = [ create_arg_from_spec(spec, arg) for arg in response[1:] ]
+        self.args = [ create_arg_from_spec(spec, arg) for arg in response[1 : ] ]
 
     def decode(self, data):
         result = {}
@@ -418,40 +506,56 @@ class Simple(object):
     def decode(self, data, accum=None):
         if accum is None:
             accum = {}
-        if self.type == 'string':
-            strlen = struct.unpack(">I", data[0:4])[0]
+        if self.type == "string":
+            strlen = struct.unpack(">I", data[0 : 4])[0]
             fmt = str(strlen) + "s"
-            subdata = data[4:4 + strlen]
+            subdata = data[4 : 4 + strlen]
             string_value = struct.unpack(fmt, subdata)[0].decode("UTF-8")
             accum[self.name] = string_value
             return data[4+strlen:], accum
-        elif self.type == 'binary':
-            accum[self.name] = (struct.unpack("B", data[0])[0] != 0)
-            return data[1:], accum
+        elif self.type == "binary":
+            accum[self.name] = (struct.unpack(">B", data[0])[0] != 0)
+            return data[1 : ], accum
+        elif self.type == "value":
+            # first byte is the tag type
+            tag_type = data[0]
+            value_len = self.spec.lookup_value_size_by_tag_type(tag_type)
+            value = self.spec.decode_value_bytes_for_tag_type(
+                    tag_type, data[1 : value_len + 1])
+            accum[self.name] = value
+            return data[1 + value_len:], accum
+        elif self.type == "tagged-object":
+            tag_type = data[0]
+            object_id_size = self.spec.id_sizes["objectIDSize"]
+            object_id = struct.unpack(
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[object_id_size],
+                    data[1 : 1 + object_id_size])[0],
+            accum[self.name] = {
+                    "tagType": tag_type,
+                    "objectID": object_id[0]}
+            return data[1 + object_id_size : ], accum
         else:
             size = self.spec.lookup_id_size(self.type)
-            fmt = { 1: "B",
-                    4: "I",
-                    8: "Q" }[size]
-            accum[self.name] = struct.unpack(">" + fmt, data[0:size])[0]
+            fmt = ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[size]
+            accum[self.name] = struct.unpack(fmt, data[0 : size])[0]
             return data[size:], accum
 
     def encode(self, data, accum):
         value = data[self.name]
-        if self.type == 'string':
+        if self.type == "string":
             strlen = len(value)
             fmt = str(strlen) + "s"
             accum += struct.pack(">I", len(value))
             accum += bytearray(value, "UTF-8")
-        elif self.type == 'binary':
+        elif self.type == "binary":
             accum += bytearray(struct.pack(">B", int(value)))
+        elif self.type == "untagged-value":
+            accum += self.spec.encode_value_bytes_for_tag_type(
+                    data["value"]["tagType"], data["value"]["value"])
         else:
             size = self.spec.lookup_id_size(self.type)
-            fmt = { 1: "B",
-                    4: "I",
-                    8: "Q" }[size]
-            accum += struct.pack(">" + fmt, value)
-        del data[self.name]
+            fmt = ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[size]
+            accum += struct.pack(fmt, value)
         return data, accum
 
 
@@ -466,15 +570,14 @@ class Repeat(object):
         accum += struct.pack(">I", len(values))
         for value in values:
             _, accum = self.arg.encode(value, accum)
-        del data[self.name]
         return data, accum
 
     def decode(self, data, accum=None):
         if accum is None:
             accum = {}
-        count = struct.unpack(">I", data[0:4])[0]
+        count = struct.unpack(">I", data[0 : 4])[0]
         accum[self.name] = []
-        data = data[4:]
+        data = data[4 : ]
         for i in range(count):
             data, subaccum = self.arg.decode(data, {})
             accum[self.name].append(subaccum)
@@ -485,7 +588,7 @@ class Group(object):
     def __init__(self, spec, group):
         self.spec = spec
         self.name = group[1]
-        self.args = [ create_arg_from_spec(spec, arg) for arg in group[2:] ]
+        self.args = [ create_arg_from_spec(spec, arg) for arg in group[2 : ] ]
 
     def encode(self, data, accum):
         for arg in self.args:
@@ -510,14 +613,13 @@ class Location(Group):
                 Simple(spec, ("methodID", "methodID")),
                 Simple(spec, ("long", "index"))]
 
-
 class Select(object):
     def __init__(self, spec, select):
         self.spec = spec
         self.name = select[1]
         self.choice_arg = create_arg_from_spec(spec, select[2])
         self.alts = {}
-        for alt_spec in select[3:]:
+        for alt_spec in select[3 : ]:
             alt = Alt(spec, alt_spec)
             self.alts[int(alt.position)] = alt
 
@@ -525,8 +627,7 @@ class Select(object):
         choice = data[self.choice_arg.name]
         data, accum = self.choice_arg.encode(data, accum)
         alt = self.alts[choice]
-        _, accum = alt.encode(data[self.name], accum)
-        del data[self.name]
+        _, accum = alt.encode(data, accum)
         return data, accum
 
     def decode(self, data, accum=None):
@@ -536,9 +637,7 @@ class Select(object):
         data, result = self.choice_arg.decode(data)
         choice = result[self.choice_arg.name]
         alt = self.alts[choice]
-        data, result = alt.decode(data, result)
-        accum[self.name] = result
-        return data, accum
+        return alt.decode(data, result)
 
 
 class Alt(object):
@@ -552,7 +651,7 @@ class Alt(object):
             constant = spec.lookup_constant("EventKind", val_name)
             self.position = constant.value
         self.args = []
-        for arg_spec in alt[2:]:
+        for arg_spec in alt[2 : ]:
             self.args.append(create_arg_from_spec(spec, arg_spec))
 
     def encode(self, data, accum):
@@ -592,7 +691,7 @@ GRAMMAR_JDWP_SPEC = pyparsing.OneOrMore(SPEC_GRAMMAR_S_EXP)
 
 # This is the actual spec text. Where else should we put it?
 def RAW_JDWP_TEXT():
-  return '''
+  return """
 (CommandSet VirtualMachine=1
     (Command Version=1 
         "Returns the JDWP version implemented by the target VM. "
@@ -3694,4 +3793,4 @@ def RAW_JDWP_TEXT():
     (Constant INVOKE_NONVIRTUAL = 0x02
         "otherwise, normal virtual invoke (instance methods only)")
 )
-'''
+"""

@@ -21,7 +21,12 @@ echo '| test /   \__| \__| |__/'
 set +e
 
 cd "$dir" # ensure we're back where we started
-PYTHONPATH="." python pyjdb/pyjdb_test.py -v
+
+TEST_ARGS=pyjdb.pyjdb_test
+if [[ -n "$1" ]]; then
+  TEST_ARGS=$@
+fi
+PYTHONPATH="." python -m unittest -v $TEST_ARGS
 
 ps aux \
   | grep java \

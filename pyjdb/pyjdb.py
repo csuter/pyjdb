@@ -182,10 +182,8 @@ class JdwpConnection(object):
                 pass
             if err == EVENT_MAGIC_NUMBER:
                 self.__handle_event(req_id, reply_packed)
-            if err == 0:
-                self.__handle_reply(req_id, reply_packed)
             else:
-                self.__handle_error(req_id, err)
+                self.__handle_reply(req_id, err, reply_packed)
 
     def __handle_event(self, req_id, event_packed):
         command = self.__jdwp_spec.lookup_command("Event", "Composite")
@@ -194,15 +192,9 @@ class JdwpConnection(object):
         self.event_cv.notify()
         self.event_cv.release()
 
-    def __handle_reply(self, req_id, reply_packed):
+    def __handle_reply(self, req_id, err, reply_packed):
         self.reply_cv.acquire()
-        self.__replies_by_req_id[req_id] = (0, reply_packed)
-        self.reply_cv.notify()
-        self.reply_cv.release()
-
-    def __handle_error(self, req_id, err):
-        self.reply_cv.acquire()
-        self.__replies_by_req_id[req_id] = (err, [])
+        self.__replies_by_req_id[req_id] = (err, reply_packed)
         self.reply_cv.notify()
         self.reply_cv.release()
 

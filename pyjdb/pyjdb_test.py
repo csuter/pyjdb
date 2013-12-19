@@ -13,7 +13,18 @@ class PyjdbTestBase(unittest.TestCase):
     """Base class for pyjdb package tests.
     
     Handles the work of compiling the test code once for each test class, and
-    starting the java process for each test case"""
+    starting the java process for each test case. Namely, each test class
+    derives from PyjdbTestBase. PyjdbTestBase has a default implementation of
+    the TestCase @classmethod setUpClass() that creates a default sample test
+    java class definition, writes it to a file, and calls javac on it. The
+    setUp method then starts a jvm in debug mode running the test code once for
+    each test method.
+
+    Subclasses of PyjdbTestBase may override setUpClass and redefine
+    'debug_target_code' (the java code to compile and debug) and
+    'debug_target_main_class' (a class containing a public static void main
+    method in the test java code) to fit the needs of a particular test case.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -32,7 +43,7 @@ class PyjdbTestBase(unittest.TestCase):
         with open(test_source_filepath, "w") as test_source_file:
             test_source_file.write(cls.debug_target_code)
         build_test_code = subprocess.check_output(
-            "javac %s" % test_source_filepath, shell=True)
+            "javac -g:source,lines,vars %s" % test_source_filepath, shell=True)
 
     def setUp(self):
         # boot up the sample java program in target jvm
@@ -554,21 +565,23 @@ class MethodTest(PyjdbTestBase):
     def setUpClass(cls):
         cls.debug_target_code = """
         public class MethodTest {
-            static Thing thing;
-            public static void main(String[] args) {
-                while (true);
+            public static void main(String[] args) throws Exception {
+                Thing thing = new Thing();
+                while (true) {
+                    Thread.sleep(1000);
+                }
             }
-        }
 
-        class Thing {
-            public int propertyA = 10;
-            public int propertyB = 20;
+            static class Thing {
+                public int propertyA = 10;
+                public int propertyB = 20;
 
-            public int sum_of_squares() {
-                int propertyASquared = propertyA * propertyA;
-                int propertyBSquared = propertyB * propertyB;
-                int result = propertyASquared + propertyBSquared;
-                return result;
+                public int sumOfSquares() {
+                    int propertyASquared = propertyA * propertyA;
+                    int propertyBSquared = propertyB * propertyB;
+                    int result = propertyASquared + propertyBSquared;
+                    return result;
+                }
             }
         }
         """
@@ -602,7 +615,7 @@ class MethodTest(PyjdbTestBase):
     def test_method_variable_table(self):
         event_req_set_resp = self.jdwp.EventRequest.Set({
                 "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
-                "suspendPolicy": self.jdwp.SuspendPolicy.ALL,
+                "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
                 "modifiers": []})
         self.assertIsNotNone(event_req_set_resp)
         self.jdwp.VirtualMachine.Resume()
@@ -610,29 +623,150 @@ class MethodTest(PyjdbTestBase):
             req_id, event_data = event_raw
             for event in event_data["events"]:
                 if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
-                    print(event)
-                    return True
+                    if event["ClassPrepare"]["signature"] == "LMethodTest$Thing;":
+                        return True
             return False
         _, test_class_prepare_event = self.jdwp.await_event(matcher)
-        print(test_class_prepare_event)
+        self.assertIn("events", test_class_prepare_event)
+        self.assertEquals(1, len(test_class_prepare_event["events"]))
+        self.assertIn("ClassPrepare", test_class_prepare_event["events"][0])
+        class_prepare_event = test_class_prepare_event["events"][0]["ClassPrepare"]
+        self.assertIn("typeID", class_prepare_event)
+        thing_class_id = class_prepare_event["typeID"]
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": thing_class_id})
+        self.assertIn("declared", methods_resp)
+        for method in methods_resp["declared"]:
+            if method["name"] == u"sumOfSquares":
+                method_id = method["methodID"]
+        self.assertIsNotNone(method_id)
+        variable_table_resp = self.jdwp.Method.VariableTable({
+                "refType": thing_class_id,
+                "methodID": method_id})
+        self.assertIn("slots", variable_table_resp)
+        self.assertGreater(len(variable_table_resp["slots"]), 1)
+        self.assertIn("codeIndex", variable_table_resp["slots"][0])
+        self.assertIn("slot", variable_table_resp["slots"][0])
+        self.assertIn("length", variable_table_resp["slots"][0])
+        self.assertIn("name", variable_table_resp["slots"][0])
+        self.assertIn("signature", variable_table_resp["slots"][0])
 
-        #all_classes_response = self.jdwp.VirtualMachine.AllClasses()
-        #for cls in all_classes_response["classes"]:
-        #    print(cls["signature"])
-        #for method in methods_resp["declared"]:
-        #    if method["name"] == u"length":
-        #        length_method_id = method["methodID"]
-        #self.assertIsNotNone(length_method_id)
-        #variable_table_resp = self.jdwp.Method.VariableTable({
-        #        "refType": string_class_id,
-        #        "methodID": length_method_id})
-        #print(variable_table_resp)
+    def test_method_bytecodes(self):
+        event_req_set_resp = self.jdwp.EventRequest.Set({
+                "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
+                "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
+                "modifiers": []})
+        self.assertIsNotNone(event_req_set_resp)
+        self.jdwp.VirtualMachine.Resume()
+        def matcher(event_raw):
+            req_id, event_data = event_raw
+            for event in event_data["events"]:
+                if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
+                    if event["ClassPrepare"]["signature"] == "LMethodTest$Thing;":
+                        return True
+            return False
+        _, test_class_prepare_event = self.jdwp.await_event(matcher)
+        self.assertIn("events", test_class_prepare_event)
+        self.assertEquals(1, len(test_class_prepare_event["events"]))
+        self.assertIn("ClassPrepare", test_class_prepare_event["events"][0])
+        class_prepare_event = test_class_prepare_event["events"][0]["ClassPrepare"]
+        self.assertIn("typeID", class_prepare_event)
+        thing_class_id = class_prepare_event["typeID"]
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": thing_class_id})
+        self.assertIn("declared", methods_resp)
+        for method in methods_resp["declared"]:
+            if method["name"] == u"sumOfSquares":
+                method_id = method["methodID"]
+        self.assertIsNotNone(method_id)
+        bytecode_resp = self.jdwp.Method.Bytecodes({
+                "refType": thing_class_id,
+                "methodID": method_id})
+        self.assertIn("bytes", bytecode_resp)
+        self.assertGreater(len(bytecode_resp["bytes"]), 0)
+        self.assertIn("bytecode", bytecode_resp["bytes"][0])
 
-    #def test_method_bytecodes(self):
-    #def test_method_is_obsolete(self):
-    #def test_method_variable_table_with_generic(self):
-    #def test_object_reference_reference_type(self):
+    def test_method_is_obsolete(self):
+        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/String;"})
+        string_class_id = classes_by_sig["classes"][0]["typeID"]
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": string_class_id})
+        for method in methods_resp["declared"]:
+            if method["name"] == u"length":
+                length_method_id = method["methodID"]
+        self.assertIsNotNone(length_method_id)
+        is_obsolete_resp = self.jdwp.Method.IsObsolete({
+                "refType": string_class_id,
+                "methodID": length_method_id})
+        self.assertIn("isObsolete", is_obsolete_resp)
+
+    def test_method_variable_table_with_generic(self):
+        event_req_set_resp = self.jdwp.EventRequest.Set({
+                "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
+                "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
+                "modifiers": []})
+        self.assertIsNotNone(event_req_set_resp)
+        self.jdwp.VirtualMachine.Resume()
+        def matcher(event_raw):
+            req_id, event_data = event_raw
+            for event in event_data["events"]:
+                if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
+                    if event["ClassPrepare"]["signature"] == "LMethodTest$Thing;":
+                        return True
+            return False
+        _, test_class_prepare_event = self.jdwp.await_event(matcher)
+        self.assertIn("events", test_class_prepare_event)
+        self.assertEquals(1, len(test_class_prepare_event["events"]))
+        self.assertIn("ClassPrepare", test_class_prepare_event["events"][0])
+        class_prepare_event = test_class_prepare_event["events"][0]["ClassPrepare"]
+        self.assertIn("typeID", class_prepare_event)
+        thing_class_id = class_prepare_event["typeID"]
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": thing_class_id})
+        self.assertIn("declared", methods_resp)
+        for method in methods_resp["declared"]:
+            if method["name"] == u"sumOfSquares":
+                method_id = method["methodID"]
+        self.assertIsNotNone(method_id)
+        variable_table_resp = self.jdwp.Method.VariableTableWithGeneric({
+                "refType": thing_class_id,
+                "methodID": method_id})
+        self.assertIn("slots", variable_table_resp)
+        self.assertGreater(len(variable_table_resp["slots"]), 1)
+        self.assertIn("codeIndex", variable_table_resp["slots"][0])
+        self.assertIn("slot", variable_table_resp["slots"][0])
+        self.assertIn("length", variable_table_resp["slots"][0])
+        self.assertIn("name", variable_table_resp["slots"][0])
+        self.assertIn("signature", variable_table_resp["slots"][0])
+        self.assertIn("genericSignature", variable_table_resp["slots"][0])
+
+class ObjectReferenceTest(PyjdbTestBase):
+    def setUp(self):
+        super(ObjectReferenceTest, self).setUp()
+        string_class_resp = self.jdwp.VirtualMachine.ClassesBySignature({
+                "signature": "Ljava/lang/String;"})
+        self.string_class_id = string_class_resp["classes"][0]["typeID"]
+        class_object_resp = self.jdwp.ReferenceType.ClassObject({
+                "refType": self.string_class_id})
+        self.string_class_object_id = class_object_resp["classObject"]
+        fields_resp = self.jdwp.ReferenceType.Fields({
+                "refType": self.string_class_id})
+        self.string_class_fields = fields_resp["declared"]
+
+    def test_object_reference_reference_type(self):
+        reference_type_resp = self.jdwp.ObjectReference.ReferenceType({
+                "object": self.string_class_object_id})
+        self.assertIn("refTypeTag", reference_type_resp)
+        self.assertIn("typeID", reference_type_resp)
+
     #def test_object_reference_get_values(self):
+    #    serial_version_uid_field_id = dict([
+    #            (field["name"], field["fieldID"]) for field in
+    #            self.string_class_fields])["serialVersionUID"]
+    #    get_values_resp = self.jdwp.ObjectReference.GetValues({
+    #            "object": self.string_class_object_id,
+    #            "fields": [{"fieldID": serial_version_uid_field_id}]})
     #def test_object_reference_set_values(self):
     #def test_object_reference_monitor_info(self):
     #def test_object_reference_invoke_method(self):

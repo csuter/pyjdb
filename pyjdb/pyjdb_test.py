@@ -1,3 +1,4 @@
+import logging 
 import os
 import pyjdb
 import signal
@@ -760,13 +761,17 @@ class ObjectReferenceTest(PyjdbTestBase):
         self.assertIn("refTypeTag", reference_type_resp)
         self.assertIn("typeID", reference_type_resp)
 
-    #def test_object_reference_get_values(self):
-    #    serial_version_uid_field_id = dict([
-    #            (field["name"], field["fieldID"]) for field in
-    #            self.string_class_fields])["serialVersionUID"]
-    #    get_values_resp = self.jdwp.ObjectReference.GetValues({
-    #            "object": self.string_class_object_id,
-    #            "fields": [{"fieldID": serial_version_uid_field_id}]})
+    def test_object_reference_get_values(self):
+        serial_version_uid_field_id = dict([
+                (field["name"], field["fieldID"]) for field in
+                self.string_class_fields])["CASE_INSENSITIVE_ORDER"]
+        req = {
+                "object": self.string_class_object_id,
+                "fields": [{"fieldID": serial_version_uid_field_id}]}
+        print(req)
+        get_values_resp = self.jdwp.ObjectReference.GetValues(req)
+        print(get_values_resp)
+
     #def test_object_reference_set_values(self):
     #def test_object_reference_monitor_info(self):
     #def test_object_reference_invoke_method(self):

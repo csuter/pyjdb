@@ -1,3 +1,4 @@
+import logging as log
 import pyparsing
 import re
 import socket
@@ -8,15 +9,12 @@ import time
 class Error(Exception):
     pass
 
+class Timeout(Error):
+    pass
 
 EVENT_MAGIC_NUMBER = 0x4064
 
 STRUCT_FMTS_BY_SIZE_UNSIGNED = {1: "B", 4: "I", 8: "Q"}
-
-
-def debug_string(obj):
-    from pprint import pprint
-    pprint(vars(obj))
 
 
 class Jdwp(object):
@@ -90,13 +88,14 @@ class GenericConstantSet(object):
             setattr(self, constant_name, constant.value)
 
 class JdwpConnection(object):
-    def __init__(self, host, port, jdwp_spec):
+    def __init__(self, host, port, jdwp_spec, timeout=10.0):
         self.__host = host
         self.__port = port
         self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.__jdwp_spec = jdwp_spec
         self.__next_req_id = 1
         self.__replies_by_req_id = {}
+        self.__timeout = timeout
         self.events = []
 
     def __handshake(self):
@@ -230,11 +229,21 @@ class JdwpConnection(object):
 
     def __get_reply(self, req_id):
         """Blocks until a reply is received for "req_id"; returns err, reply"""
-        self.reply_cv.acquire()
-        while req_id not in self.__replies_by_req_id:
-            self.reply_cv.wait()
-        err, reply = self.__replies_by_req_id[req_id]
-        self.reply_cv.release()
+        start_time = time.clock()
+        try:
+            self.reply_cv.acquire()
+            while req_id not in self.__replies_by_req_id:
+                if time.clock() - start_time >= self.__timeout:
+                    raise Timeout("Timed out")
+                    log.debug(start_time, time.clock())
+                self.reply_cv.wait(2.0)
+            err, reply = self.__replies_by_req_id[req_id]
+        except Timeout as t:
+            log.debug("Re-throwing timeout")
+            raise t
+        finally:
+            self.reply_cv.release()
+
         if err != 0:
             raise Error("JDWP error: %s" % err)
         return reply
@@ -343,7 +352,7 @@ class JdwpSpec(object):
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
             'B': lambda vb: struct.unpack(">B", vb),
             'C': lambda vb: chr(struct.unpack(">H", vb)),  # H = 2 byte ushort
-            'L': lambda vb, id_s: struct.unpack(
+            'L': lambda vb: struct.unpack(
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # OBJECT
             'F': lambda vb: struct.unpack(">f", vb),  # FLOAT
             'D': lambda vb: struct.unpack(">d", vb),  # DOUBLE
@@ -363,8 +372,10 @@ class JdwpSpec(object):
             'c': lambda vb: struct.unpack(
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # CLASS
         }
-        value = decode_fn_by_tag_type[tag_type](value_bytes[0 : value_len])[0],
-        return value[0]
+        print("value_len: %s" % value_len)
+        print("tag_type: %s" % tag_type)
+        value = decode_fn_by_tag_type[tag_type](value_bytes[0 : value_len])[0]
+        return value
 
     def encode_value_bytes_for_tag_type(self, tag_type, value):
         value_len = self.lookup_value_size_by_tag_type(tag_type)
@@ -373,7 +384,7 @@ class JdwpSpec(object):
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
             'B': lambda val: struct.pack(">B", val),
             'C': lambda val: chr(struct.pack(">H", val)),  # H = 2 byte ushort
-            'L': lambda val, id_s: struct.pack(
+            'L': lambda val: struct.pack(
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # OBJECT
             'F': lambda val: struct.pack(">f", val),  # FLOAT
             'D': lambda val: struct.pack(">d", val),  # DOUBLE

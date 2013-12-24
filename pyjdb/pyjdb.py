@@ -372,8 +372,6 @@ class JdwpSpec(object):
             'c': lambda vb: struct.unpack(
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # CLASS
         }
-        print("value_len: %s" % value_len)
-        print("tag_type: %s" % tag_type)
         value = decode_fn_by_tag_type[tag_type](value_bytes[0 : value_len])[0]
         return value
 

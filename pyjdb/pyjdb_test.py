@@ -32,19 +32,10 @@ class PyjdbTestBase(unittest.TestCase):
         if not hasattr(cls, "debug_target_code"):
             cls.debug_target_code = """
             public class PyjdbTest {
-              public static final int INTEGER = 7;
-
-              public PyjdbTest() {
-              }
-
-              public void run() throws Exception {
+              public static void main(String[] args) throws Exception {
                 while (true) {
                   Thread.sleep(1000);
                 }
-              }
-
-              public static void main(String[] args) throws Exception{
-                new PyjdbTest().run();
               }
             }
             """
@@ -76,6 +67,77 @@ class PyjdbTestBase(unittest.TestCase):
         self.test_target_subprocess.send_signal(signal.SIGKILL)
         self.test_target_subprocess.wait()
         self.devnull.close()
+
+    def resume_and_await_class_load(self, class_name, suspend_policy = None):
+        if not suspend_policy:
+            suspend_policy = self.jdwp.SuspendPolicy.NONE
+        signature = "L%s;" % class_name
+        event_req_set_resp = self.jdwp.EventRequest.Set({
+                "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
+                "suspendPolicy": suspend_policy,
+                "modifiers": [{
+                        "modKind": 5,
+                        "classPattern": class_name}]})
+        self.jdwp.VirtualMachine.Resume()
+        def matcher(event_raw):
+            req_id, event_data = event_raw
+            for event in event_data["events"]:
+                if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
+                    if event["ClassPrepare"]["signature"] == signature:
+                        return True
+            return False
+        _, test_class_prepare_event = self.jdwp.await_event(matcher)
+        class_prepare_event = test_class_prepare_event["events"][0]["ClassPrepare"]
+
+    def set_breakpoint_in_main(self, main_class_name):
+        self.resume_and_await_class_load(main_class_name, self.jdwp.SuspendPolicy.ALL)
+        signature = "L%s;" % main_class_name
+        resp = self.jdwp.VirtualMachine.ClassesBySignature({
+                "signature": "L%s;" % main_class_name})
+        main_class_id = resp["classes"][0]["typeID"]
+        resp = self.jdwp.ReferenceType.Methods({"refType": main_class_id})
+        methods_by_name = dict([(method["name"], method) for method in
+                resp["declared"]])
+        main_method = methods_by_name["main"]
+        resp = self.jdwp.Method.LineTable({
+                "refType": main_class_id,
+                "methodID": main_method["methodID"]})
+        initial_index = resp["lines"][0]["lineCodeIndex"]
+        resp = self.jdwp.EventRequest.Set({
+                "eventKind": self.jdwp.EventKind.BREAKPOINT,
+                "suspendPolicy": self.jdwp.SuspendPolicy.ALL,
+                "modifiers": [{
+                        "modKind": 7,
+                        "typeTag": self.jdwp.TypeTag.CLASS,
+                        "classID": main_class_id,
+                        "methodID": main_method["methodID"],
+                        "index": initial_index}]})
+        def matcher(event_raw):
+            _, event = event_raw
+            for event in event["events"]:
+                if event["eventKind"] == self.jdwp.EventKind.BREAKPOINT:
+                    return True
+        self.jdwp.VirtualMachine.Resume()
+        _, breakpoint_events = self.jdwp.await_event(matcher)
+        return breakpoint_events
+
+    def test_resume_and_await_class_load(self):
+        self.resume_and_await_class_load("PyjdbTest")
+
+    def test_set_breakpoint_in_main(self):
+        breakpoint_events = self.set_breakpoint_in_main("PyjdbTest")
+        self.assertIn("events", breakpoint_events)
+        self.assertIn("suspendPolicy", breakpoint_events)
+        self.assertEquals(len(breakpoint_events["events"]), 1)
+        self.assertIn("Breakpoint", breakpoint_events["events"][0])
+        breakpoint_event = breakpoint_events["events"][0]["Breakpoint"]
+        self.assertIn("classID", breakpoint_event)
+        self.assertIn("index", breakpoint_event)
+        self.assertIn("methodID", breakpoint_event)
+        self.assertIn("thread", breakpoint_event)
+        self.assertIn("requestID", breakpoint_event)
+        self.assertIn("typeTag", breakpoint_event)
+
 
 class VirtualMachineTest(PyjdbTestBase):
     def test_virtual_machine_version(self):
@@ -411,7 +473,7 @@ class ReferenceTypeTest(PyjdbTestBase):
         self.assertGreater(len(instances_resp["instances"]), 0)
         instance = instances_resp["instances"][0]
         self.assertIn("instance", instance)
-        self.assertIn("tagType", instance["instance"])
+        self.assertIn("typeTag", instance["instance"])
         self.assertIn("objectID", instance["instance"])
 
     def test_reference_type_class_file_version(self):
@@ -431,73 +493,79 @@ class ReferenceTypeTest(PyjdbTestBase):
         self.assertIn("cpbytes", constant_pool_resp["bytes"][0])
 
 class ClassTypeTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class ClassTypeTest {
+          public Integer integer = 7;
+          public String string = "ClassTypeTestString";
+
+          public static void main(String[] args) throws Exception {
+            while (true) {
+              Thread.sleep(1000);
+            }
+          }
+        }"""
+        cls.debug_target_main_class = "ClassTypeTest"
+        super(ClassTypeTest, cls).setUpClass()
+
+    def setUp(self):
+        super(ClassTypeTest, self).setUp()
+        self.thread_class_id = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Thread;"})["classes"][0]["typeID"]
+        self.integer_class_id = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/Integer;"})["classes"][0]["typeID"]
+        self.system_class_id = self.jdwp.VirtualMachine.ClassesBySignature({
+            "signature": u"Ljava/lang/System;"})["classes"][0]["typeID"]
+        self.breakpoint_event = self.set_breakpoint_in_main(
+                "ClassTypeTest")["events"][0]["Breakpoint"]
+
     def test_class_type_superclass(self):
-        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
-            "signature": u"Ljava/lang/Thread;"})
-        thread_class_id = classes_by_sig["classes"][0]["typeID"]
         superclass_resp = self.jdwp.ClassType.Superclass({
-                "clazz": thread_class_id})
+                "clazz": self.thread_class_id})
         self.assertIn("superclass", superclass_resp)
 
     def test_class_type_set_values(self):
-        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
-            "signature": u"Ljava/lang/Integer;"})
-        self.assertIn("classes", classes_by_sig)
-        self.assertGreater(len(classes_by_sig["classes"]), 0)
-        integer_class_id = classes_by_sig["classes"][0]["typeID"]
         fields_resp = self.jdwp.ReferenceType.Fields({
-                "refType": integer_class_id})
-        fields = fields_resp["declared"]
-        field_ids = []
-        for field in fields:
-            if field["name"] == "MIN_VALUE":
-                field_ids.append({"fieldID": field["fieldID"]})
+                "refType": self.integer_class_id})
+        field_ids_by_name = dict([(field["name"], field["fieldID"]) for
+                field in fields_resp["declared"]])
+        field_ids = [{"fieldID": field_ids_by_name["MIN_VALUE"]}]
         get_values_resp = self.jdwp.ReferenceType.GetValues({
-            "refType": integer_class_id,
+            "refType": self.integer_class_id,
             "fields": field_ids})
-        values = [entry["value"] for entry in get_values_resp["values"]]
-        self.assertIn(-2147483648, values)
+        self.assertEquals(-2147483648, get_values_resp["values"][0]["value"])
         set_values_resp = self.jdwp.ClassType.SetValues({
-                "clazz": integer_class_id,
+                "clazz": self.integer_class_id,
                 "values": [{
                         "fieldID": field_ids[0]["fieldID"],
                         "value": {
-                                "tagType": self.jdwp.Tag.INT,
+                                "typeTag": self.jdwp.Tag.INT,
                                 "value": -2147483643}}]})
-        self.assertIsNotNone(set_values_resp)
         get_values_resp = self.jdwp.ReferenceType.GetValues({
-            "refType": integer_class_id,
+            "refType": self.integer_class_id,
             "fields": field_ids})
-        values = [entry["value"] for entry in get_values_resp["values"]]
-        self.assertIn(-2147483643, values)
+        self.assertEquals(-2147483643, get_values_resp["values"][0]["value"])
 
     def test_class_type_invoke_method(self):
-        # TODO(cgs): revisit this once event setting/catchin is well-tested
-        all_threads_resp = self.jdwp.VirtualMachine.AllThreads()
-        self.assertIn("threads", all_threads_resp)
-        self.assertGreater(len(all_threads_resp["threads"]), 0)
-        thread_id = all_threads_resp["threads"][2]["thread"]
-
-        classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
-            "signature": u"Ljava/lang/System;"})
-        self.assertIn("classes", classes_by_sig)
-        self.assertGreater(len(classes_by_sig["classes"]), 0)
-        system_class_id = classes_by_sig["classes"][0]["typeID"]
         methods_resp = self.jdwp.ReferenceType.Methods({
-            "refType": system_class_id})
-        for method_entry in methods_resp["declared"]:
-            if method_entry["name"] == u"currentTimeMillis":
-                current_time_millis_method_id = method_entry["methodID"]
+            "refType": self.system_class_id})
+        method_ids_by_name = dict([
+                (method["name"], method["methodID"]) for method in
+                methods_resp["declared"]])
+        current_time_millis_method_id = method_ids_by_name["currentTimeMillis"]
         self.assertIsNotNone(current_time_millis_method_id)
-        # TODO(cgs): fix this. as written, the below will cause an
-        # "INVALID_THREAD" error. we must first properly set and catch an
-        # event, then we can test invoation of static methods
-        #invocation_resp = self.jdwp.ClassType.InvokeMethod({
-        #        "clazz": system_class_id,
-        #        "thread": thread_id,
-        #        "methodID": current_time_millis_method_id,
-        #        "arguments": [],
-        #        "options": 1})
+        invocation_resp = self.jdwp.ClassType.InvokeMethod({
+                "clazz": self.system_class_id,
+                "thread": self.breakpoint_event["thread"],
+                "methodID": current_time_millis_method_id,
+                "arguments": [],
+                "options": 1})
+        self.assertIn("exception", invocation_resp)
+        self.assertIn("objectID", invocation_resp["exception"])
+        self.assertIn("typeTag", invocation_resp["exception"])
+        self.assertIn("returnValue", invocation_resp)
+        self.assertIsInstance(invocation_resp["returnValue"], int)
 
     def test_class_type_new_instance(self):
         # TODO(cgs): as above, revisit after events tested
@@ -527,7 +595,7 @@ class ArrayTypeTest(PyjdbTestBase):
                 "length": 20000000})
         self.assertIn("newArray", new_instance_resp)
         self.assertIn("objectID", new_instance_resp["newArray"])
-        self.assertIn("tagType", new_instance_resp["newArray"])
+        self.assertIn("typeTag", new_instance_resp["newArray"])
 
 class MethodTest(PyjdbTestBase):
     @classmethod
@@ -558,20 +626,8 @@ class MethodTest(PyjdbTestBase):
         super(MethodTest, cls).setUpClass()
 
     def setUp(self):
-        event_req_set_resp = self.jdwp.EventRequest.Set({
-                "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
-                "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
-                "modifiers": []})
-        self.jdwp.VirtualMachine.Resume()
-        def matcher(event_raw):
-            req_id, event_data = event_raw
-            for event in event_data["events"]:
-                if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
-                    if event["ClassPrepare"]["signature"] == "LMethodTest$Thing;":
-                        return True
-            return False
-        _, test_class_prepare_event = self.jdwp.await_event(matcher)
-        class_prepare_event = test_class_prepare_event["events"][0]["ClassPrepare"]
+        super(MethodTest, self).setUp()
+        class_prepare_event = self.resume_and_await_class_load("MethodTest$Thing")
         self.thing_class_id = class_prepare_event["typeID"]
         methods_resp = self.jdwp.ReferenceType.Methods({
                 "refType": thing_class_id})
@@ -634,20 +690,45 @@ class MethodTest(PyjdbTestBase):
         self.assertIn("genericSignature", variable_table_resp["slots"][0])
 
 class ObjectReferenceTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class ObjectReferenceTest {
+          public Integer integer = 7;
+          public String string = "hello";
+
+          public ObjectReferenceTest() {
+          }
+
+          public static void main(String[] args) throws Exception {
+            ObjectReferenceTest objectReferenceTest = new ObjectReferenceTest();
+            while (true) {
+              Thread.sleep(1000);
+            }
+          }
+        }"""
+        cls.debug_target_main_class = "ObjectReferenceTest"
+        super(ObjectReferenceTest, cls).setUpClass()
+
     def setUp(self):
         super(ObjectReferenceTest, self).setUp()
+        event_req_set_resp = self.jdwp.EventRequest.Set({
+                "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
+                "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
+                "modifiers": []})
         self.jdwp.VirtualMachine.Resume()
-        print(1); time.sleep(.5)
-        self.string_class_id = self.jdwp.VirtualMachine.ClassesBySignature({
-                "signature": "Ljava/lang/String;"})["classes"][0]["typeID"]
-        print(2); time.sleep(.5)
-        self.string_class_object_id = self.jdwp.ReferenceType.ClassObject({
-                "refType": self.string_class_id})["classObject"]
-        print(3); time.sleep(.5)
-        fields_resp = self.jdwp.ReferenceType.Fields({
-                "refType": self.string_class_object_id})
-        print(4); time.sleep(.5)
-        self.string_class_object_fields = fields_resp["declared"]
+        def matcher(event_raw):
+            req_id, event_data = event_raw
+            for event in event_data["events"]:
+                if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
+                    if event["ClassPrepare"]["signature"] == "LObjectReferenceTest;":
+                        return True
+            return False
+        _, test_class_prepare_event = self.jdwp.await_event(matcher)
+        class_prepare_event = test_class_prepare_event["events"][0]["ClassPrepare"]
+        obj_ref_test_class_id = class_prepare_event["typeID"]
+        self.obj_ref_test_class_fields = self.jdwp.ReferenceType.Fields({
+                "refType": obj_ref_test_class_id})["declared"]
 
     def test_object_reference_reference_type(self):
         reference_type_resp = self.jdwp.ObjectReference.ReferenceType({
@@ -656,16 +737,7 @@ class ObjectReferenceTest(PyjdbTestBase):
         self.assertIn("typeID", reference_type_resp)
 
     def test_object_reference_get_values(self):
-        print(5); time.sleep(.5)
-        serial_version_uid_field_id = dict([
-                (field["name"], field["fieldID"]) for field in
-                self.string_class_object_fields])["serialVersionUID"]
-        print(6); time.sleep(.5)
-        get_values_resp = self.jdwp.ObjectReference.GetValues({
-                "object": self.string_class_object_id,
-                "fields": [{"fieldID": serial_version_uid_field_id}]})
-        print(7); time.sleep(.5)
-        print(get_values_resp)
+        pass
 
     #def test_object_reference_set_values(self):
     #def test_object_reference_monitor_info(self):
@@ -702,7 +774,7 @@ class ObjectReferenceTest(PyjdbTestBase):
     #def test_stack_frame_get_values(self):
     #def test_stack_frame_set_values(self):
     #def test_stack_frame_this_object(self):
-    #def test_stack_frame_pop_frames	(self):
+    #def test_stack_frame_pop_frames(self):
     #def test_class_object_reference_reflected_type(self):
     #def test_event_composite(self):
 

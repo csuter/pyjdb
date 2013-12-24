@@ -37,10 +37,12 @@ class Jdwp(object):
         0x4000: "enum"
     }
 
-    def __init__(self, host="localhost", jvm_port=5005, event_cb=None):
+    def __init__(self, host="localhost", jvm_port=5005, event_cb=None,
+            timeout=10.0):
         self.__jdwp_spec = JdwpSpec()
+        self.__timeout = timeout
         self.__jdwp_connection = JdwpConnection(
-                host, jvm_port, self.__jdwp_spec)
+                host, jvm_port, self.__jdwp_spec, timeout)
 
     def initialize(self):
         for command_set_name in self.__jdwp_spec.command_sets:
@@ -57,17 +59,24 @@ class Jdwp(object):
         self.__jdwp_connection.disconnect()
 
     def await_event(self, matcher_fn):
+        start_time = time.time()
         found_event = None
         while found_event is None:
-            self.__jdwp_connection.event_cv.acquire()
-            while not self.__jdwp_connection.events:
-                self.__jdwp_connection.event_cv.wait()
-            for event in self.__jdwp_connection.events:
-                if matcher_fn(event):
-                    found_event = event
-                    break
-            self.__jdwp_connection.events.remove(event)
-            self.__jdwp_connection.event_cv.release()
+            try:
+                self.__jdwp_connection.event_cv.acquire()
+                while not self.__jdwp_connection.events:
+                    if time.time() - start_time > self.__timeout:
+                        raise Timeout("Timed out awaiting event")
+                    self.__jdwp_connection.event_cv.wait(2.0)
+                for event in self.__jdwp_connection.events:
+                    if matcher_fn(event):
+                        found_event = event
+                        break
+                self.__jdwp_connection.events.remove(event)
+            except Timeout as t:
+                raise t
+            finally:
+                self.__jdwp_connection.event_cv.release()
         return found_event
                 
 
@@ -187,7 +196,9 @@ class JdwpConnection(object):
     def __handle_event(self, req_id, event_packed):
         command = self.__jdwp_spec.lookup_command("Event", "Composite")
         self.event_cv.acquire()
-        self.events.append((req_id, command.decode(event_packed)))
+        event = command.decode(event_packed)
+        log.debug(event)
+        self.events.append((req_id, event))
         self.event_cv.notify()
         self.event_cv.release()
 
@@ -229,13 +240,13 @@ class JdwpConnection(object):
 
     def __get_reply(self, req_id):
         """Blocks until a reply is received for "req_id"; returns err, reply"""
-        start_time = time.clock()
+        start_time = time.time()
         try:
             self.reply_cv.acquire()
             while req_id not in self.__replies_by_req_id:
-                if time.clock() - start_time >= self.__timeout:
+                if time.time() - start_time >= self.__timeout:
                     raise Timeout("Timed out")
-                    log.debug(start_time, time.clock())
+                    log.debug(start_time, time.time())
                 self.reply_cv.wait(2.0)
             err, reply = self.__replies_by_req_id[req_id]
         except Timeout as t:
@@ -532,7 +543,7 @@ class Simple(object):
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[object_id_size],
                     data[1 : 1 + object_id_size])[0],
             accum[self.name] = {
-                    "tagType": tag_type,
+                    "typeTag": tag_type,
                     "objectID": object_id[0]}
             return data[1 + object_id_size : ], accum
         else:
@@ -552,7 +563,7 @@ class Simple(object):
             accum += bytearray(struct.pack(">B", int(value)))
         elif self.type == "untagged-value":
             accum += self.spec.encode_value_bytes_for_tag_type(
-                    data["value"]["tagType"], data["value"]["value"])
+                    data["value"]["typeTag"], data["value"]["value"])
         else:
             size = self.spec.lookup_id_size(self.type)
             fmt = ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[size]

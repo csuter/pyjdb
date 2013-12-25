@@ -568,19 +568,36 @@ class ClassTypeTest(PyjdbTestBase):
         self.assertIsInstance(invocation_resp["returnValue"], int)
 
     def test_class_type_new_instance(self):
-        # TODO(cgs): as above, revisit after events tested
-        #classes_by_sig = self.jdwp.VirtualMachine.ClassesBySignature({
-        #    "signature": u"Ljava/lang/Integer;"})
-        #self.assertIn("classes", classes_by_sig)
-        #self.assertGreater(len(classes_by_sig["classes"]), 0)
-        #integer_class_id = classes_by_sig["classes"][0]["typeID"]
-        #methods_resp = self.jdwp.ReferenceType.Methods({
-        #        "refType": integer_class_id})
-        #for method in methods_resp["declared"]:
-        #    if method["name"] == u"<init>" and method["signature"] == u"(I)V":
-        #        constructor_id = method["methodID"]
-        #self.assertIsNotNone(constructor_id)
-        pass
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": self.integer_class_id})
+        for method in methods_resp["declared"]:
+            if method["name"] == u"<init>" and method["signature"] == u"(I)V":
+                constructor_id = method["methodID"]
+        self.assertIsNotNone(constructor_id)
+        new_instance_resp = self.jdwp.ClassType.NewInstance({
+            "clazz": self.integer_class_id,
+            "thread": self.breakpoint_event["thread"],
+            "methodID": constructor_id,
+            "arguments": [{
+                "arg": {
+                    "typeTag": self.jdwp.Tag.INT,
+                    "value": 1234}}],
+            "options": self.jdwp.InvokeOptions.INVOKE_SINGLE_THREADED})
+        self.assertIn("exception", new_instance_resp)
+        self.assertIn("objectID", new_instance_resp["exception"])
+        self.assertIn("typeTag", new_instance_resp["exception"])
+        self.assertIn("newObject", new_instance_resp)
+        self.assertIn("objectID", new_instance_resp["newObject"])
+        self.assertIn("typeTag", new_instance_resp["newObject"])
+        fields_resp = self.jdwp.ReferenceType.Fields({
+                "refType": self.integer_class_id})
+        field_ids_by_name = dict([(field["name"], field["fieldID"]) for
+                field in fields_resp["declared"]])
+        field_ids = [{"fieldID": field_ids_by_name[u"value"]}]
+        get_values_resp = self.jdwp.ObjectReference.GetValues({
+            "object": new_instance_resp["newObject"]["objectID"],
+            "fields": field_ids})
+        self.assertEquals(get_values_resp["values"][0]["value"], 1234)
 
 class ArrayTypeTest(PyjdbTestBase):
     def test_array_type_new_instance(self):
@@ -694,14 +711,13 @@ class ObjectReferenceTest(PyjdbTestBase):
     def setUpClass(cls):
         cls.debug_target_code = """
         public class ObjectReferenceTest {
-          public Integer integer = 7;
-          public String string = "hello";
+          public int integer = 7;
 
-          public ObjectReferenceTest() {
+          public void update() {
+            this.integer = 100;
           }
 
           public static void main(String[] args) throws Exception {
-            ObjectReferenceTest objectReferenceTest = new ObjectReferenceTest();
             while (true) {
               Thread.sleep(1000);
             }
@@ -712,42 +728,154 @@ class ObjectReferenceTest(PyjdbTestBase):
 
     def setUp(self):
         super(ObjectReferenceTest, self).setUp()
-        event_req_set_resp = self.jdwp.EventRequest.Set({
-                "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
-                "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
-                "modifiers": []})
-        self.jdwp.VirtualMachine.Resume()
-        def matcher(event_raw):
-            req_id, event_data = event_raw
-            for event in event_data["events"]:
-                if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
-                    if event["ClassPrepare"]["signature"] == "LObjectReferenceTest;":
-                        return True
-            return False
-        _, test_class_prepare_event = self.jdwp.await_event(matcher)
-        class_prepare_event = test_class_prepare_event["events"][0]["ClassPrepare"]
-        obj_ref_test_class_id = class_prepare_event["typeID"]
-        self.obj_ref_test_class_fields = self.jdwp.ReferenceType.Fields({
-                "refType": obj_ref_test_class_id})["declared"]
+        self.breakpoint_event = self.set_breakpoint_in_main(
+                "ObjectReferenceTest")["events"][0]["Breakpoint"]
+        self.test_class_id = self.breakpoint_event["classID"]
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": self.test_class_id})
+        for method in methods_resp["declared"]:
+            if method["name"] == u"<init>":
+                constructor_id = method["methodID"]
+        self.test_object = self.jdwp.ClassType.NewInstance({
+            "clazz": self.test_class_id,
+            "thread": self.breakpoint_event["thread"],
+            "methodID": constructor_id,
+            "arguments": [],
+            "options": self.jdwp.InvokeOptions.INVOKE_SINGLE_THREADED})[
+                    "newObject"]
+        self.test_object_id = self.test_object["objectID"]
 
     def test_object_reference_reference_type(self):
         reference_type_resp = self.jdwp.ObjectReference.ReferenceType({
-                "object": self.string_class_object_id})
+                "object": self.test_object_id})
         self.assertIn("refTypeTag", reference_type_resp)
         self.assertIn("typeID", reference_type_resp)
+        self.assertEquals(reference_type_resp["typeID"], self.test_class_id)
 
     def test_object_reference_get_values(self):
-        pass
+        fields_resp = self.jdwp.ReferenceType.Fields({
+                "refType": self.test_class_id})
+        field_ids_by_name = dict([(field["name"], field["fieldID"]) for
+                field in fields_resp["declared"]])
+        field_ids = [{"fieldID": field_ids_by_name["integer"]}]
+        get_values_resp = self.jdwp.ObjectReference.GetValues({
+            "object": self.test_object_id,
+            "fields": field_ids})
+        self.assertEquals(get_values_resp["values"][0]["value"], 7)
 
-    #def test_object_reference_set_values(self):
-    #def test_object_reference_monitor_info(self):
-    #def test_object_reference_invoke_method(self):
-    #def test_object_reference_disable_collection(self):
-    #def test_object_reference_enable_collection(self):
-    #def test_object_reference_is_collected(self):
-    #def test_object_reference_referring_objects(self):
-    #def test_string_reference_value(self):
-    #def test_thread_reference_name(self):
+    def test_object_reference_set_values(self):
+        fields_resp = self.jdwp.ReferenceType.Fields({
+                "refType": self.test_class_id})
+        field_ids_by_name = dict([(field["name"], field["fieldID"]) for
+                field in fields_resp["declared"]])
+        integer_field_id = field_ids_by_name["integer"]
+        field_ids = [{"fieldID": integer_field_id}]
+        get_values_resp = self.jdwp.ObjectReference.GetValues({
+            "object": self.test_object_id,
+            "fields": field_ids})
+        self.assertEquals(get_values_resp["values"][0]["value"], 7)
+        set_values_resp = self.jdwp.ObjectReference.SetValues({
+            "object": self.test_object_id,
+            "values": [{
+                    "fieldID": integer_field_id,
+                    "value": {
+                        "typeTag": "I",
+                        "value": 42}}]})
+        get_values_resp = self.jdwp.ObjectReference.GetValues({
+            "object": self.test_object_id,
+            "fields": field_ids})
+        self.assertEquals(get_values_resp["values"][0]["value"], 42)
+
+    def test_object_reference_monitor_info(self):
+        monitor_info_resp = self.jdwp.ObjectReference.MonitorInfo({
+            "object": self.test_object_id})
+        self.assertIn("owner", monitor_info_resp)
+        self.assertIn("entryCount", monitor_info_resp)
+        self.assertIn("waiters", monitor_info_resp)
+
+    def test_object_reference_invoke_method(self):
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": self.test_class_id})
+        method_ids_by_name = dict([(method["name"], method["methodID"]) for
+                method in methods_resp["declared"]])
+        update_method_id = method_ids_by_name["update"]
+        self.jdwp.ObjectReference.InvokeMethod({
+            "object": self.test_object_id,
+            "thread": self.breakpoint_event["thread"],
+            "clazz": self.test_class_id,
+            "methodID": update_method_id,
+            "arguments": [],
+            "options": self.jdwp.InvokeOptions.INVOKE_SINGLE_THREADED})
+        fields_resp = self.jdwp.ReferenceType.Fields({
+                "refType": self.test_class_id})
+        field_ids_by_name = dict([(field["name"], field["fieldID"]) for
+                field in fields_resp["declared"]])
+        integer_field_id = field_ids_by_name["integer"]
+        field_ids = [{"fieldID": integer_field_id}]
+        get_values_resp = self.jdwp.ObjectReference.GetValues({
+            "object": self.test_object_id,
+            "fields": field_ids})
+        self.assertEquals(get_values_resp["values"][0]["value"], 100)
+
+    def test_object_reference_disable_collection(self):
+        resp = self.jdwp.ObjectReference.DisableCollection({
+            "object": self.test_object_id})
+        self.assertIsNotNone(resp)
+
+    def test_object_reference_enable_collection(self):
+        resp = self.jdwp.ObjectReference.EnableCollection({
+            "object": self.test_object_id})
+        self.assertIsNotNone(resp)
+
+    def test_object_reference_is_collected(self):
+        resp = self.jdwp.ObjectReference.IsCollected({
+            "object": self.test_object_id})
+        self.assertIn("isCollected", resp)
+
+    def test_object_reference_referring_objects(self):
+        resp = self.jdwp.ObjectReference.ReferringObjects({
+            "object": self.test_object_id,
+            "maxReferrers": 0})
+        self.assertIn("referringObjects", resp)
+
+class StringReferenceTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        class StringReferenceTest {
+          public static String string = "Hello";
+
+          public static void main(String[] args) throws Exception {
+            while (true) {
+              Thread.sleep(1000);
+            }
+          }
+        }"""
+        cls.debug_target_main_class = "StringReferenceTest"
+        super(StringReferenceTest, cls).setUpClass()
+
+    def setUp(self):
+        super(StringReferenceTest, self).setUp()
+        self.breakpoint_event = self.set_breakpoint_in_main(
+                "StringReferenceTest")["events"][0]["Breakpoint"]
+        self.test_class_id = self.breakpoint_event["classID"]
+
+    def test_string_reference_value(self):
+        fields_resp = self.jdwp.ReferenceType.Fields({
+            "refType": self.test_class_id})
+        string_field = fields_resp["declared"][0]
+        field_ids = [{
+            "fieldID": string_field["fieldID"]}]
+        string_object_id = self.jdwp.ReferenceType.GetValues({
+            "refType": self.test_class_id,
+            "fields": field_ids})["values"][0]["value"]
+        resp = self.jdwp.StringReference.Value({
+            "stringObject": string_object_id})
+        self.assertEquals(resp["stringValue"], u"Hello")
+
+class ThreadReferenceTest(PyjdbTestBase):
+    def test_thread_reference_name(self):
+        pass
     #def test_thread_reference_suspend(self):
     #def test_thread_reference_resume(self):
     #def test_thread_reference_status(self):

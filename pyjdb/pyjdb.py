@@ -357,6 +357,8 @@ class JdwpSpec(object):
         return lookup_fn_by_tag_type[tag_type](self.id_sizes)
 
     def decode_value_bytes_for_tag_type(self, tag_type, value_bytes):
+        if not value_bytes:
+            return None
         value_len = self.lookup_value_size_by_tag_type(tag_type)
         decode_fn_by_tag_type = {
             '[': lambda vb: struct.unpack(
@@ -364,24 +366,24 @@ class JdwpSpec(object):
             'B': lambda vb: struct.unpack(">B", vb),
             'C': lambda vb: chr(struct.unpack(">H", vb)),  # H = 2 byte ushort
             'L': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # OBJECT
-            'F': lambda vb: struct.unpack(">f", vb),  # FLOAT
-            'D': lambda vb: struct.unpack(">d", vb),  # DOUBLE
-            'I': lambda vb: struct.unpack(">i", vb),  # INT
-            'J': lambda vb: struct.unpack(">q", vb),  # LONG
-            'S': lambda vb: struct.unpack(">h", vb),  # SHORT
-            'V': lambda vb: None,  # VOID
-            'Z': lambda vb: (struct.unpack(">B", vb) != 0),  # BOOLEAN
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
+            'F': lambda vb: struct.unpack(">f", vb),
+            'D': lambda vb: struct.unpack(">d", vb),
+            'I': lambda vb: struct.unpack(">i", vb),
+            'J': lambda vb: struct.unpack(">q", vb),
+            'S': lambda vb: struct.unpack(">h", vb),
+            'V': lambda vb: (None),
+            'Z': lambda vb: (struct.unpack(">B", vb) != 0),
             's': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # STRING
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
             't': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # THREAD
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
             'g': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # THREADGROUP
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
             'l': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # CLASSLOADER
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
             'c': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),  # CLASS
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
         }
         value = decode_fn_by_tag_type[tag_type](value_bytes[0 : value_len])[0]
         return value
@@ -414,7 +416,7 @@ class JdwpSpec(object):
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # CLASS
         }
         value_bytes = encode_fn_by_tag_type[tag_type](value)
-        return value_bytes
+        return bytearray(value_bytes)
 
 class ConstantSet(object):
     def __init__(self, constant_set):
@@ -561,6 +563,10 @@ class Simple(object):
             accum += bytearray(value, "UTF-8")
         elif self.type == "binary":
             accum += bytearray(struct.pack(">B", int(value)))
+        elif self.type == "value":
+            accum += bytearray(value["typeTag"])
+            accum += self.spec.encode_value_bytes_for_tag_type(
+                    value["typeTag"], value["value"])
         elif self.type == "untagged-value":
             accum += self.spec.encode_value_bytes_for_tag_type(
                     data["value"]["typeTag"], data["value"]["value"])

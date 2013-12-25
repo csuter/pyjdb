@@ -87,7 +87,7 @@ class PyjdbTestBase(unittest.TestCase):
                         return True
             return False
         _, test_class_prepare_event = self.jdwp.await_event(matcher)
-        class_prepare_event = test_class_prepare_event["events"][0]["ClassPrepare"]
+        return test_class_prepare_event["events"][0]["ClassPrepare"]
 
     def set_breakpoint_in_main(self, main_class_name):
         self.resume_and_await_class_load(main_class_name, self.jdwp.SuspendPolicy.ALL)
@@ -119,24 +119,7 @@ class PyjdbTestBase(unittest.TestCase):
                     return True
         self.jdwp.VirtualMachine.Resume()
         _, breakpoint_events = self.jdwp.await_event(matcher)
-        return breakpoint_events
-
-    def test_resume_and_await_class_load(self):
-        self.resume_and_await_class_load("PyjdbTest")
-
-    def test_set_breakpoint_in_main(self):
-        breakpoint_events = self.set_breakpoint_in_main("PyjdbTest")
-        self.assertIn("events", breakpoint_events)
-        self.assertIn("suspendPolicy", breakpoint_events)
-        self.assertEquals(len(breakpoint_events["events"]), 1)
-        self.assertIn("Breakpoint", breakpoint_events["events"][0])
-        breakpoint_event = breakpoint_events["events"][0]["Breakpoint"]
-        self.assertIn("classID", breakpoint_event)
-        self.assertIn("index", breakpoint_event)
-        self.assertIn("methodID", breakpoint_event)
-        self.assertIn("thread", breakpoint_event)
-        self.assertIn("requestID", breakpoint_event)
-        self.assertIn("typeTag", breakpoint_event)
+        return breakpoint_events["events"][0]["Breakpoint"]
 
 
 class VirtualMachineTest(PyjdbTestBase):
@@ -517,8 +500,7 @@ class ClassTypeTest(PyjdbTestBase):
             "signature": u"Ljava/lang/Integer;"})["classes"][0]["typeID"]
         self.system_class_id = self.jdwp.VirtualMachine.ClassesBySignature({
             "signature": u"Ljava/lang/System;"})["classes"][0]["typeID"]
-        self.breakpoint_event = self.set_breakpoint_in_main(
-                "ClassTypeTest")["events"][0]["Breakpoint"]
+        self.breakpoint_event = self.set_breakpoint_in_main("ClassTypeTest")
 
     def test_class_type_superclass(self):
         superclass_resp = self.jdwp.ClassType.Superclass({
@@ -619,22 +601,16 @@ class MethodTest(PyjdbTestBase):
     def setUpClass(cls):
         cls.debug_target_code = """
         public class MethodTest {
-            public static void main(String[] args) throws Exception {
-                Thing thing = new Thing();
-                while (true) {
-                    Thread.sleep(1000);
-                }
+            public static int getNumber() {
+                int a = 10;
+                int b = 5;
+                int result = a + b;
+                return result;
             }
 
-            static class Thing {
-                public int propertyA = 10;
-                public int propertyB = 20;
-
-                public int sumOfSquares() {
-                    int propertyASquared = propertyA * propertyA;
-                    int propertyBSquared = propertyB * propertyB;
-                    int result = propertyASquared + propertyBSquared;
-                    return result;
+            public static void main(String[] args) throws Exception {
+                while (true) {
+                    Thread.sleep(1000);
                 }
             }
         }
@@ -644,33 +620,33 @@ class MethodTest(PyjdbTestBase):
 
     def setUp(self):
         super(MethodTest, self).setUp()
-        class_prepare_event = self.resume_and_await_class_load("MethodTest$Thing")
-        self.thing_class_id = class_prepare_event["typeID"]
+        class_prepare_event = self.resume_and_await_class_load("MethodTest")
+        self.test_class_id = class_prepare_event["typeID"]
         methods_resp = self.jdwp.ReferenceType.Methods({
-                "refType": thing_class_id})
+                "refType": self.test_class_id})
         self.methods = methods_resp["declared"]
         for method in methods_resp["declared"]:
-            if method["name"] == u"sumOfSquares":
-                self.sum_of_squares_method_id = method["methodID"]
+            if method["name"] == u"getNumber":
+                self.get_number_method_id = method["methodID"]
 
     def test_method_line_table(self):
         line_table_resp = self.jdwp.Method.LineTable({
-                "refType": self.thing_class_id,
-                "methodID": self.sum_of_squares_method_id})
+                "refType": self.test_class_id,
+                "methodID": self.get_number_method_id})
         self.assertIn("start", line_table_resp)
         self.assertIn("end", line_table_resp)
         self.assertIn("lines", line_table_resp)
         self.assertGreater(len(line_table_resp["lines"]), 0)
-        for line in line_table_resp["lines"]:
-            self.assertIn("lineCodeIndex", line)
-            self.assertIsInstance(line["lineCodeIndex"], int)
-            self.assertIn("lineNumber", line)
-            self.assertIsInstance(line["lineNumber"], int)
+        line = line_table_resp["lines"][0]
+        self.assertIn("lineCodeIndex", line)
+        self.assertIsInstance(line["lineCodeIndex"], int)
+        self.assertIn("lineNumber", line)
+        self.assertIsInstance(line["lineNumber"], int)
 
     def test_method_variable_table(self):
         variable_table_resp = self.jdwp.Method.VariableTable({
-                "refType": self.thing_class_id,
-                "methodID": self.sum_of_squares_method_id})
+                "refType": self.test_class_id,
+                "methodID": self.get_number_method_id})
         self.assertIn("slots", variable_table_resp)
         self.assertGreater(len(variable_table_resp["slots"]), 1)
         self.assertIn("codeIndex", variable_table_resp["slots"][0])
@@ -681,22 +657,22 @@ class MethodTest(PyjdbTestBase):
 
     def test_method_bytecodes(self):
         bytecode_resp = self.jdwp.Method.Bytecodes({
-                "refType": self.thing_class_id,
-                "methodID": self.sum_of_squares_method_id})
+                "refType": self.test_class_id,
+                "methodID": self.get_number_method_id})
         self.assertIn("bytes", bytecode_resp)
         self.assertGreater(len(bytecode_resp["bytes"]), 0)
         self.assertIn("bytecode", bytecode_resp["bytes"][0])
 
     def test_method_is_obsolete(self):
         is_obsolete_resp = self.jdwp.Method.IsObsolete({
-                "refType": self.thing_class_id,
-                "methodID": self.sum_of_squares_method_id})
+                "refType": self.test_class_id,
+                "methodID": self.get_number_method_id})
         self.assertIn("isObsolete", is_obsolete_resp)
 
     def test_method_variable_table_with_generic(self):
         variable_table_resp = self.jdwp.Method.VariableTableWithGeneric({
-                "refType": self.thing_class_id,
-                "methodID": self.sum_of_squares_method_id})
+                "refType": self.test_class_id,
+                "methodID": self.get_number_method_id})
         self.assertIn("slots", variable_table_resp)
         self.assertGreater(len(variable_table_resp["slots"]), 1)
         self.assertIn("codeIndex", variable_table_resp["slots"][0])
@@ -729,7 +705,7 @@ class ObjectReferenceTest(PyjdbTestBase):
     def setUp(self):
         super(ObjectReferenceTest, self).setUp()
         self.breakpoint_event = self.set_breakpoint_in_main(
-                "ObjectReferenceTest")["events"][0]["Breakpoint"]
+                "ObjectReferenceTest")
         self.test_class_id = self.breakpoint_event["classID"]
         methods_resp = self.jdwp.ReferenceType.Methods({
                 "refType": self.test_class_id})
@@ -857,7 +833,7 @@ class StringReferenceTest(PyjdbTestBase):
     def setUp(self):
         super(StringReferenceTest, self).setUp()
         self.breakpoint_event = self.set_breakpoint_in_main(
-                "StringReferenceTest")["events"][0]["Breakpoint"]
+                "StringReferenceTest")
         self.test_class_id = self.breakpoint_event["classID"]
 
     def test_string_reference_value(self):
@@ -876,6 +852,7 @@ class StringReferenceTest(PyjdbTestBase):
 class ThreadReferenceTest(PyjdbTestBase):
     def test_thread_reference_name(self):
         pass
+
     #def test_thread_reference_suspend(self):
     #def test_thread_reference_resume(self):
     #def test_thread_reference_status(self):

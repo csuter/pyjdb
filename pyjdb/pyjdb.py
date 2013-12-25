@@ -16,6 +16,23 @@ EVENT_MAGIC_NUMBER = 0x4064
 
 STRUCT_FMTS_BY_SIZE_UNSIGNED = {1: "B", 4: "I", 8: "Q"}
 
+STRUCT_FMT_BY_TYPE_TAG = {
+        '[': "?",
+        'B': "B",
+        'C': "H",  # H = 2 byte ushort
+        'L': "?",
+        'F': "f",
+        'D': "d",
+        'I': "i",
+        'J': "q",
+        'S': "h",
+        'Z': "B",
+        's': "?",
+        't': "?",
+        'g': "?",
+        'l': "?",
+        'c': "?"}
+
 
 class Jdwp(object):
     ACCESS_MODIFIER_PUBLIC = 0x0001
@@ -324,21 +341,23 @@ class JdwpSpec(object):
             "classObject":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
             "interfaceID":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
             "interfaceType":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
+            "arrayObject":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
             "arrayType":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
             "arrayTypeID":    lambda id_sizes: id_sizes["referenceTypeIDSize"],
             "method":    lambda id_sizes: id_sizes["methodIDSize"],
             "methodID":    lambda id_sizes: id_sizes["methodIDSize"],
             "field":    lambda id_sizes: id_sizes["fieldIDSize"],
             "fieldID":    lambda id_sizes: id_sizes["fieldIDSize"],
+            "frame":    lambda id_sizes: id_sizes["frameIDSize"],
             "frameID":    lambda id_sizes: id_sizes["frameIDSize"] }
         return lookup_fn_by_type[type_name](self.id_sizes)
 
-    def lookup_value_size_by_tag_type(self, tag_type):
+    def lookup_value_size_by_type_tag(self, type_tag):
         # These are copied from the *comments* of the TagType constant_set in
         # the spec
-        lookup_fn_by_tag_type = {
+        lookup_fn_by_type_tag = {
             '[': lambda id_sizes: id_sizes["objectIDSize"],  # ARRAY
-            'B': lambda id_sizes: 1,  # BYT E
+            'B': lambda id_sizes: 1,  # BYTE
             'C': lambda id_sizes: 2,  # CHAR
             'L': lambda id_sizes: id_sizes["objectIDSize"],  # OBJECT
             'F': lambda id_sizes: 4,  # FLOAT
@@ -354,68 +373,55 @@ class JdwpSpec(object):
             'l': lambda id_sizes: id_sizes["objectIDSize"],  # CLASS_LOADER
             'c': lambda id_sizes: id_sizes["objectIDSize"],  # CLASS_OBJECT
         }
-        return lookup_fn_by_tag_type[tag_type](self.id_sizes)
+        return lookup_fn_by_type_tag[type_tag](self.id_sizes)
 
-    def decode_value_bytes_for_tag_type(self, tag_type, value_bytes):
-        if not value_bytes:
-            return None
-        value_len = self.lookup_value_size_by_tag_type(tag_type)
-        decode_fn_by_tag_type = {
-            '[': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
-            'B': lambda vb: struct.unpack(">B", vb),
-            'C': lambda vb: chr(struct.unpack(">H", vb)),  # H = 2 byte ushort
-            'L': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
-            'F': lambda vb: struct.unpack(">f", vb),
-            'D': lambda vb: struct.unpack(">d", vb),
-            'I': lambda vb: struct.unpack(">i", vb),
-            'J': lambda vb: struct.unpack(">q", vb),
-            'S': lambda vb: struct.unpack(">h", vb),
-            'V': lambda vb: (None),
-            'Z': lambda vb: (struct.unpack(">B", vb) != 0),
-            's': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
-            't': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
-            'g': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
-            'l': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
-            'c': lambda vb: struct.unpack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], vb),
-        }
-        value = decode_fn_by_tag_type[tag_type](value_bytes[0 : value_len])[0]
-        return value
+    def decode_value_bytes_for_type_tag(self, type_tag, value_bytes, count=1):
+        void_tag = self.lookup_constant("Tag", "VOID").value
+        if type_tag == void_tag or value_bytes is None:
+            return (None,)
+        value_len = self.lookup_value_size_by_type_tag(type_tag)
+        struct_fmt = STRUCT_FMT_BY_TYPE_TAG[type_tag]
+        if struct_fmt == "?":
+            struct_fmt = "B%s" % STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len]
+            value_len += 1
+            unpack_fmt = ">%s" % (struct_fmt * count)
+            result = struct.unpack(unpack_fmt, value_bytes[0 : count * value_len])
+            result = zip(result[::2], result[1::2])
+        else:
+            unpack_fmt = ">%s" % (struct_fmt * count)
+            result = struct.unpack(unpack_fmt, value_bytes[0 : count * value_len])
+        return result
 
-    def encode_value_bytes_for_tag_type(self, tag_type, value):
-        value_len = self.lookup_value_size_by_tag_type(tag_type)
-        encode_fn_by_tag_type = {
+    def encode_value_bytes_for_type_tag(self, type_tag, value):
+        if type_tag == 'V' and value is None:
+            return bytearray()
+        value_len = self.lookup_value_size_by_type_tag(type_tag)
+        encode_fn_by_type_tag = {
             '[': lambda val: struct.pack(
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
             'B': lambda val: struct.pack(">B", val),
             'C': lambda val: chr(struct.pack(">H", val)),  # H = 2 byte ushort
             'L': lambda val: struct.pack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # OBJECT
-            'F': lambda val: struct.pack(">f", val),  # FLOAT
-            'D': lambda val: struct.pack(">d", val),  # DOUBLE
-            'I': lambda val: struct.pack(">i", val),  # INT
-            'J': lambda val: struct.pack(">q", val),  # LONG
-            'S': lambda val: struct.pack(">h", val),  # SHORT
-            'V': lambda val: None,  # VOID
-            'Z': lambda val: (struct.pack(">B", val) != 0),  # BOOLEAN
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
+            'F': lambda val: struct.pack(">f", val),
+            'D': lambda val: struct.pack(">d", val),
+            'I': lambda val: struct.pack(">i", val),
+            'J': lambda val: struct.pack(">q", val),
+            'S': lambda val: struct.pack(">h", val),
+            'V': lambda val: None,
+            'Z': lambda val: (struct.pack(">B", val) != 0),
             's': lambda val: struct.pack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # STRING
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
             't': lambda val: struct.pack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # THREAD
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
             'g': lambda val: struct.pack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # THREADGROUP
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
             'l': lambda val: struct.pack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # CLASSLOADER
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
             'c': lambda val: struct.pack(
-                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),  # CLASS
+                    ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len], val),
         }
-        value_bytes = encode_fn_by_tag_type[tag_type](value)
+        value_bytes = encode_fn_by_type_tag[type_tag](value)
         return bytearray(value_bytes)
 
 class ConstantSet(object):
@@ -480,11 +486,12 @@ def create_arg_from_spec(spec, arg):
             "Repeat": Repeat,
             "Group": Group,
             "Select": Select,
-            "location": Location}
+            "location": Location,
+            "string": String}
     if arg_type in type_map:
         return type_map[arg_type](spec, arg)
     else:
-        return Simple(spec, arg)
+        return Primitive(spec, arg)
 
 
 class Request(object):
@@ -510,8 +517,58 @@ class Response(object):
             data, result = arg.decode(data, result)
         return result
 
+class String(object):
+    def __init__(self, spec, string):
+        self.spec = spec
+        self.type = string[0]
+        self.name = string[1]
 
-class Simple(object):
+    def decode(self, data, accum=None):
+        if accum is None:
+            accum = {}
+        strlen = struct.unpack(">I", data[0 : 4])[0]
+        fmt = str(strlen) + "s"
+        subdata = data[4 : 4 + strlen]
+        string_value = struct.unpack(fmt, subdata)[0].decode("UTF-8")
+        accum[self.name] = string_value
+        return data[4+strlen:], accum
+
+    def encode(self, data, accum):
+        value = data[self.name]
+        strlen = len(value)
+        fmt = str(strlen) + "s"
+        accum += struct.pack(">I", len(value))
+        accum += bytearray(value, "UTF-8")
+
+
+class Value(object):
+    def __init__(self, spec, value):
+        self.spec = spec
+        self.type = value[0]
+        self.name = value[1]
+
+    def decode(self, data, accum=None):
+        # first byte is the tag type
+        type_tag = data[0]
+        value_len = self.spec.lookup_value_size_by_type_tag(type_tag)
+        value = self.spec.decode_value_bytes_for_type_tag(
+                type_tag, data)[0][1]
+        accum[self.name] = {
+                "typeTag": type_tag,
+                "value": value }
+        return data[1 + value_len : ], accum
+
+    def encode(self, data, accum):
+        accum += bytearray(value["typeTag"])
+        accum += self.spec.encode_value_bytes_for_type_tag(
+                value["typeTag"], value["value"])
+
+
+class UntaggedValue(object):
+
+
+
+class Primitive(object):
     def __init__(self, spec, simple):
         self.spec = spec
         self.type = simple[0]
@@ -521,33 +578,32 @@ class Simple(object):
         if accum is None:
             accum = {}
         if self.type == "string":
-            strlen = struct.unpack(">I", data[0 : 4])[0]
-            fmt = str(strlen) + "s"
-            subdata = data[4 : 4 + strlen]
-            string_value = struct.unpack(fmt, subdata)[0].decode("UTF-8")
-            accum[self.name] = string_value
-            return data[4+strlen:], accum
         elif self.type == "binary":
             accum[self.name] = (struct.unpack(">B", data[0])[0] != 0)
             return data[1 : ], accum
         elif self.type == "value":
-            # first byte is the tag type
-            tag_type = data[0]
-            value_len = self.spec.lookup_value_size_by_tag_type(tag_type)
-            value = self.spec.decode_value_bytes_for_tag_type(
-                    tag_type, data[1 : value_len + 1])
-            accum[self.name] = value
-            return data[1 + value_len:], accum
         elif self.type == "tagged-object":
-            tag_type = data[0]
+            type_tag = data[0]
             object_id_size = self.spec.id_sizes["objectIDSize"]
             object_id = struct.unpack(
                     ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[object_id_size],
                     data[1 : 1 + object_id_size])[0],
             accum[self.name] = {
-                    "typeTag": tag_type,
+                    "typeTag": type_tag,
                     "objectID": object_id[0]}
             return data[1 + object_id_size : ], accum
+        elif self.type == "typed-sequence":
+            type_tag = data[0]
+            entry_count = struct.unpack(">I", data[1:5])[0]
+            value_len = self.spec.lookup_value_size_by_type_tag(type_tag)
+            if STRUCT_FMT_BY_TYPE_TAG[type_tag] == "?":
+                value_len += 1
+            value = self.spec.decode_value_bytes_for_type_tag(
+                    type_tag,
+                    data[5 : ],
+                    count = entry_count)
+            accum[self.name] = value
+            return data[5 + entry_count * value_len : ], accum
         else:
             size = self.spec.lookup_id_size(self.type)
             fmt = ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[size]
@@ -557,19 +613,16 @@ class Simple(object):
     def encode(self, data, accum):
         value = data[self.name]
         if self.type == "string":
-            strlen = len(value)
-            fmt = str(strlen) + "s"
-            accum += struct.pack(">I", len(value))
-            accum += bytearray(value, "UTF-8")
         elif self.type == "binary":
             accum += bytearray(struct.pack(">B", int(value)))
         elif self.type == "value":
-            accum += bytearray(value["typeTag"])
-            accum += self.spec.encode_value_bytes_for_tag_type(
-                    value["typeTag"], value["value"])
         elif self.type == "untagged-value":
-            accum += self.spec.encode_value_bytes_for_tag_type(
+            accum += self.spec.encode_value_bytes_for_type_tag(
                     data["value"]["typeTag"], data["value"]["value"])
+        elif self.type == "int":
+            size = 4
+            fmt = ">i"
+            accum += struct.pack(fmt, value)
         else:
             size = self.spec.lookup_id_size(self.type)
             fmt = ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[size]
@@ -626,10 +679,10 @@ class Location(Group):
         self.spec = spec
         self.name = loc[1]
         self.args = [
-                Simple(spec, ("byte", "typeTag")),
-                Simple(spec, ("referenceTypeID", "classID")),
-                Simple(spec, ("methodID", "methodID")),
-                Simple(spec, ("long", "index"))]
+                Primitive(spec, ("byte", "typeTag")),
+                Primitive(spec, ("referenceTypeID", "classID")),
+                Primitive(spec, ("methodID", "methodID")),
+                Primitive(spec, ("long", "index"))]
 
 class Select(object):
     def __init__(self, spec, select):

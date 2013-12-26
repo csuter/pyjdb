@@ -1,11 +1,14 @@
 # pylint: disable=R0904
 """Test harness for jdwp functional tests"""
-import os
+import atexit
 from pyjdb import pyjdb
+import os
 import signal
+import socket
 import subprocess
 import tempfile
 import unittest
+
 
 TEST_TMP_DIRNAME = tempfile.mkdtemp()
 
@@ -47,21 +50,35 @@ class TestBase(unittest.TestCase):
         subprocess.check_output(
             "javac -g:source,lines,vars %s" % test_source_filepath, shell=True)
 
+    def __pick_port(self):
+        port_picker_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        port_picker_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        port_picker_socket.bind(("localhost", 0))
+        port = port_picker_socket.getsockname()[1]
+        port_picker_socket.close()
+        return port
+
     def setUp(self):
         # boot up the sample java program in target jvm
         self.devnull = open(subprocess.os.devnull, "r")
+        port = 5005
+        #port = self.__pick_port()
         self.test_target_subprocess = subprocess.Popen([
             "/usr/bin/java", "-cp", TEST_TMP_DIRNAME,
-            "-Xrunjdwp:transport=dt_socket,server=y,suspend=y,address=5005",
+            "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=%d" % port,
             self.debug_target_main_class],
             stdout=self.devnull, stderr=self.devnull)
-        self.jdwp = pyjdb.Jdwp("localhost", 5005)
-        self.jdwp.initialize()
+        self.jdwp = pyjdb.Jdwp("localhost", port)
+        try:
+            self.jdwp.initialize()
+        except pyjdb.Error as e:
+            self.test_target_subprocess.send_signal(signal.SIGKILL)
+            self.test_target_subprocess.wait()
+            self.devnull.close()
+            raise e
 
     def tearDown(self):
-        # disconnect debugger
         self.jdwp.disconnect()
-        # kill target jvm
         self.test_target_subprocess.send_signal(signal.SIGKILL)
         self.test_target_subprocess.wait()
         self.devnull.close()
@@ -135,4 +152,3 @@ class TestBase(unittest.TestCase):
 
         See notes on set_breakpoint_in_method."""
         return self.set_breakpoint_in_method(main_class_name, "main")
-

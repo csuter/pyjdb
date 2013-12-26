@@ -45,30 +45,30 @@ class ArrayReferenceTest(harness.TestBase):
         self.assertIn("arrayLength", resp)
         self.assertEquals(resp["arrayLength"], 5)
 
-    def test_get_values(self):
-        resp = self.jdwp.ArrayReference.GetValues({
-                "arrayObject": self.integers_array_reference,
-                "firstIndex": 0,
-                "length": 4})
-        self.assertIn("values", resp)
-        self.assertEquals(resp["values"], (1, 1, 2, 3))
-        resp = self.jdwp.ArrayReference.GetValues({
-                "arrayObject": self.strings_array_reference,
-                "firstIndex": 0,
-                "length": 4})
-        self.assertIn("values", resp)
+    #def test_get_values(self):
+    #    resp = self.jdwp.ArrayReference.GetValues({
+    #            "arrayObject": self.integers_array_reference,
+    #            "firstIndex": 0,
+    #            "length": 4})
+    #    self.assertIn("values", resp)
+    #    self.assertEquals(resp["values"], (1, 1, 2, 3))
+    #    resp = self.jdwp.ArrayReference.GetValues({
+    #            "arrayObject": self.strings_array_reference,
+    #            "firstIndex": 0,
+    #            "length": 4})
+    #    self.assertIn("values", resp)
 
-    def test_set_values(self):
-        resp = self.jdwp.ArrayReference.SetValues({
-                "arrayObject": self.integers_array_reference,
-                "firstIndex": 1,
-                "values": [{
-                        "value": {
-                                "typeTag": self.jdwp.Tag.INT,
-                                "value": 2}}]})
-        resp = self.jdwp.ArrayReference.GetValues({
-                "arrayObject": self.integers_array_reference,
-                "firstIndex": 0,
-                "length": 5})
-        self.assertIn("values", resp)
-        self.assertEquals(resp["values"], (1, 2, 2, 3, 5))
+    #def test_set_values(self):
+    #    resp = self.jdwp.ArrayReference.SetValues({
+    #            "arrayObject": self.integers_array_reference,
+    #            "firstIndex": 1,
+    #            "values": [{
+    #                    "value": {
+    #                            "typeTag": self.jdwp.Tag.INT,
+    #                            "value": 2}}]})
+    #    resp = self.jdwp.ArrayReference.GetValues({
+    #            "arrayObject": self.integers_array_reference,
+    #            "firstIndex": 0,
+    #            "length": 5})
+    #    self.assertIn("values", resp)
+    #    self.assertEquals(resp["values"], (1, 2, 2, 3, 5))

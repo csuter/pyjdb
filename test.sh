@@ -22,24 +22,15 @@ set +e
 
 cd "$dir" # ensure we're back where we started
 
-sudo python setup.py install
-
-TEST_ARGS=""
+TEST_ARGS="pyjdb.pyjdb_test"
 if [[ -n "$1" ]]; then
   TEST_ARGS=$@
 fi
-find . -name '*_test.py' \
-  | sed 's=^\./==' \
-  | sed 's=/=.=g' \
-  | sed 's/\.py$//' \
-  | grep "$TEST_ARGS" \
-  | while read test_module ; do
-      python -m unittest -v $test_module
-    done
+PYTHONPATH="." python -m unittest -v $TEST_ARGS
 
 ps aux \
   | grep java \
   | grep -v grep \
-  | grep 'jdwp.*Test' \
+  | grep 'Test' \
   | awk '{print $2}' \
   | xargs -n1 kill -9

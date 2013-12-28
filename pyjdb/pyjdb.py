@@ -1,5 +1,3 @@
-# pylint: disable=C0111
-"""Python library wrapping the Java Debug Wire Protocol (JDWP)"""
 import logging as log
 import pkg_resources
 import pyparsing
@@ -62,17 +60,19 @@ class Jdwp(object):
     def __init__(self, host="localhost", jvm_port=5005, event_cb=None,
             timeout=10.0):
         self.__timeout = timeout
-        self.__jdwp_connection = JdwpConnection(host, jvm_port, timeout)
+        self.__jdwp_connection = JdwpConnection(
+                host, jvm_port, timeout)
 
     def initialize(self):
         self.__jdwp_connection.initialize()
-        jdwp_spec = self.__jdwp_connection.get_spec()
-        for command_set_name in jdwp_spec.command_sets:
-            command_set = jdwp_spec.command_sets[command_set_name]
+        command_sets = self.__jdwp_connection.jdwp_spec.command_sets
+        constant_sets = self.__jdwp_connection.jdwp_spec.constant_sets
+        for command_set_name in command_sets:
+            command_set = command_sets[command_set_name]
             setattr(self, command_set_name, GenericService(
                     self.__jdwp_connection, command_set))
-        for constant_set_name in jdwp_spec.constant_sets:
-            constant_set = jdwp_spec.constant_sets[constant_set_name]
+        for constant_set_name in constant_sets:
+            constant_set = constant_sets[constant_set_name]
             setattr(self, constant_set_name, GenericConstantSet(constant_set))
 
     def disconnect(self):
@@ -129,27 +129,26 @@ class JdwpConnection(object):
     def initialize(self):
         # open socket to jvm
         self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.__socket.settimeout(3.0)
-        max_tries = 5
+        self.__socket.settimeout(1.0)
+        max_tries = 20
         num_tries = 0
         while True:
             try:
                 self.__socket.connect((self.__host, self.__port))
                 break
             except socket.error as e:
-                if num_tries > max_tries:
-                    raise e
-                print("Failed to connect (%s)...retrying" % e)
-            time.sleep(5)
+                if num_tries > 20:
+                    raise Error("Failed to connect to %s:%s)" %
+                            (self.__host, self.__port))
+                pass
             time.sleep(.1)
             num_tries += 1
 
         self.__handshake()
         self.__await_vm_start()
         version = self.__hardcoded_version_request()
-        self.__jdwp_spec = JdwpSpec(version)
-        self.id_sizes = self.__hardcoded_id_sizes_request()
-        self.__jdwp_spec.id_sizes = self.id_sizes
+        self.jdwp_spec = JdwpSpec(version)
+        self.jdwp_spec.id_sizes = self.__hardcoded_id_sizes_request()
 
         self.event_cv = threading.Condition()
         self.reply_cv = threading.Condition()
@@ -162,8 +161,6 @@ class JdwpConnection(object):
         self.__reader_thread.setDaemon(True)
         self.__reader_thread.start()
 
-    def get_spec(self):
-        return self.__jdwp_spec
 
     def __handshake(self):
         handshake = b"JDWP-Handshake"
@@ -196,8 +193,11 @@ class JdwpConnection(object):
     def __hardcoded_id_sizes_request(self):
         self.__socket.send(struct.pack(">IIBBB", 11, 0, 0, 1, 7))
         id_sizes_response_data = self.__socket.recv(31);
-        id_sizes_response = struct.unpack(">IIBHIIIII", id_sizes_response_data)
-        return id_sizes_response[4 : ]
+        vm_command_set = self.jdwp_spec.command_sets["VirtualMachine"]
+        id_sizes_command_response = vm_command_set.commands["IDSizes"].response
+        id_sizes_response = id_sizes_command_response.decode(
+                id_sizes_response_data[11 : ])
+        return id_sizes_response
 
     def disconnect(self):
         self.__socket.close();
@@ -206,7 +206,7 @@ class JdwpConnection(object):
         self.__reader_thread.join(5.0)
 
     def command_request(self, service_name, command_name, data):
-        command = self.__jdwp_spec.lookup_command(service_name, command_name)
+        command = self.jdwp_spec.lookup_command(service_name, command_name)
         req_bytes = command.encode(data)
         resp_bytes = self.__send_command_sync(
                 command.command_set_id, command.id, req_bytes)
@@ -229,7 +229,7 @@ class JdwpConnection(object):
                 self.__handle_reply(req_id, err, reply_packed)
 
     def __handle_event(self, req_id, event_packed):
-        command = self.__jdwp_spec.lookup_command("Event", "Composite")
+        command = self.jdwp_spec.lookup_command("Event", "Composite")
         self.event_cv.acquire()
         event = command.decode(event_packed)
         log.debug(event)
@@ -562,6 +562,7 @@ class String(object):
         fmt = str(strlen) + "s"
         accum += struct.pack(">I", len(value))
         accum += bytearray(value, "UTF-8")
+        return data, accum
 
 
 class Value(object):
@@ -573,17 +574,28 @@ class Value(object):
         # first byte is the tag type
         type_tag = data[0]
         value_len = self.spec.lookup_value_size_by_type_tag(type_tag)
-        value = self.spec.decode_value_bytes_for_type_tag(
-                type_tag, data)[0][1]
+        void_tag = self.spec.lookup_constant("Tag", "VOID").value
+        if type_tag == void_tag:
+            accum[self.name] = {
+                    "typeTag": void_tag,
+                    "value": None}
+            return data[1 : ], accum
+        struct_fmt = STRUCT_FMT_BY_TYPE_TAG[type_tag]
+        if struct_fmt == "?":
+            struct_fmt = STRUCT_FMTS_BY_SIZE_UNSIGNED[value_len]
+        unpack_fmt = ">%s" % struct_fmt
+        value = struct.unpack(unpack_fmt, data[1 : 1 + value_len])[0]
         accum[self.name] = {
                 "typeTag": type_tag,
-                "value": value }
+                "value": value}
         return data[1 + value_len : ], accum
 
     def encode(self, data, accum):
+        value = data[self.name]
         accum += bytearray(value["typeTag"])
         accum += self.spec.encode_value_bytes_for_type_tag(
-                value["typeTag"], value["value"])
+                 value["typeTag"], value["value"])
+        return data, accum
 
 
 class UntaggedValue(object):
@@ -649,24 +661,22 @@ class Primitive(object):
         if self.type == "binary":
             accum[self.name] = (struct.unpack(">B", data[0])[0] != 0)
             return data[1 : ], accum
-        else:
-            size = self.spec.lookup_id_size(self.type)
-            fmt = ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[size]
-            accum[self.name] = struct.unpack(fmt, data[0 : size])[0]
-            return data[size:], accum
+        size = self.spec.lookup_id_size(self.type)
+        fmt = ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[size]
+        accum[self.name] = struct.unpack(fmt, data[0 : size])[0]
+        return data[size:], accum
 
     def encode(self, data, accum):
         value = data[self.name]
         if self.type == "binary":
             accum += bytearray(struct.pack(">B", int(value)))
         elif self.type == "int":
-            size = 4
             fmt = ">i"
-            accum += struct.pack(fmt, value)
+            accum += bytearray(struct.pack(fmt, value))
         else:
             size = self.spec.lookup_id_size(self.type)
             fmt = ">" + STRUCT_FMTS_BY_SIZE_UNSIGNED[size]
-            accum += struct.pack(fmt, value)
+            accum += bytearray(struct.pack(fmt, value))
         return data, accum
 
 

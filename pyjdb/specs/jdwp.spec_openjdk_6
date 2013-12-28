@@ -1009,7 +1009,7 @@ JDWP "Java(tm) Debug Wire Protocol"
         "constant_pool item of the Class File Format in the "
         "Java Virtual Machine Specification. "
         "<p>Since JDWP version 1.6. Requires canGetConstantPool capability - see "
-	"<a href=\"#JDWP_VirtualMachine_CapabilitiesNew\">CapabilitiesNew</a>.""
+	"<a href=\"#JDWP_VirtualMachine_CapabilitiesNew\">CapabilitiesNew</a>."
         (Out
             (referenceType refType "The class.")
         )

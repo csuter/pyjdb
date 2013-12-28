@@ -22,7 +22,7 @@ set +e
 
 cd "$dir" # ensure we're back where we started
 
-TEST_ARGS=pyjdb.pyjdb_test
+TEST_ARGS="pyjdb.tests.*"
 if [[ -n "$1" ]]; then
   TEST_ARGS=$@
 fi

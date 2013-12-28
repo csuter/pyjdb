@@ -374,7 +374,7 @@ class ReferenceTypeTest(PyjdbTestBase):
         get_values_resp = self.jdwp.ReferenceType.GetValues({
             "refType": self.integer_class_id,
             "fields": field_ids})
-        values = [entry["value"] for entry in get_values_resp["values"]]
+        values = [entry["value"]["value"] for entry in get_values_resp["values"]]
         self.assertIn(-2147483648, values)
         self.assertIn(2147483647, values)
 
@@ -516,7 +516,8 @@ class ClassTypeTest(PyjdbTestBase):
         get_values_resp = self.jdwp.ReferenceType.GetValues({
             "refType": self.integer_class_id,
             "fields": field_ids})
-        self.assertEquals(-2147483648, get_values_resp["values"][0]["value"])
+        self.assertEquals(
+                -2147483648, get_values_resp["values"][0]["value"]["value"])
         set_values_resp = self.jdwp.ClassType.SetValues({
                 "clazz": self.integer_class_id,
                 "values": [{
@@ -527,7 +528,8 @@ class ClassTypeTest(PyjdbTestBase):
         get_values_resp = self.jdwp.ReferenceType.GetValues({
             "refType": self.integer_class_id,
             "fields": field_ids})
-        self.assertEquals(-2147483643, get_values_resp["values"][0]["value"])
+        self.assertEquals(
+                -2147483643, get_values_resp["values"][0]["value"]["value"])
 
     def test_class_type_invoke_method(self):
         methods_resp = self.jdwp.ReferenceType.Methods({
@@ -547,7 +549,9 @@ class ClassTypeTest(PyjdbTestBase):
         self.assertIn("objectID", invocation_resp["exception"])
         self.assertIn("typeTag", invocation_resp["exception"])
         self.assertIn("returnValue", invocation_resp)
-        self.assertIsInstance(invocation_resp["returnValue"], int)
+        self.assertIn("value", invocation_resp["returnValue"])
+        self.assertIn("typeTag", invocation_resp["returnValue"])
+        self.assertIsInstance(invocation_resp["returnValue"]["value"], int)
 
     def test_class_type_new_instance(self):
         methods_resp = self.jdwp.ReferenceType.Methods({
@@ -579,7 +583,7 @@ class ClassTypeTest(PyjdbTestBase):
         get_values_resp = self.jdwp.ObjectReference.GetValues({
             "object": new_instance_resp["newObject"]["objectID"],
             "fields": field_ids})
-        self.assertEquals(get_values_resp["values"][0]["value"], 1234)
+        self.assertEquals(get_values_resp["values"][0]["value"]["value"], 1234)
 
 class ArrayTypeTest(PyjdbTestBase):
     def test_array_type_new_instance(self):
@@ -737,7 +741,7 @@ class ObjectReferenceTest(PyjdbTestBase):
         get_values_resp = self.jdwp.ObjectReference.GetValues({
             "object": self.test_object_id,
             "fields": field_ids})
-        self.assertEquals(get_values_resp["values"][0]["value"], 7)
+        self.assertEquals(get_values_resp["values"][0]["value"]["value"], 7)
 
     def test_object_reference_set_values(self):
         fields_resp = self.jdwp.ReferenceType.Fields({
@@ -749,7 +753,7 @@ class ObjectReferenceTest(PyjdbTestBase):
         get_values_resp = self.jdwp.ObjectReference.GetValues({
             "object": self.test_object_id,
             "fields": field_ids})
-        self.assertEquals(get_values_resp["values"][0]["value"], 7)
+        self.assertEquals(get_values_resp["values"][0]["value"]["value"], 7)
         set_values_resp = self.jdwp.ObjectReference.SetValues({
             "object": self.test_object_id,
             "values": [{
@@ -760,7 +764,7 @@ class ObjectReferenceTest(PyjdbTestBase):
         get_values_resp = self.jdwp.ObjectReference.GetValues({
             "object": self.test_object_id,
             "fields": field_ids})
-        self.assertEquals(get_values_resp["values"][0]["value"], 42)
+        self.assertEquals(get_values_resp["values"][0]["value"]["value"], 42)
 
     def test_object_reference_monitor_info(self):
         monitor_info_resp = self.jdwp.ObjectReference.MonitorInfo({
@@ -791,7 +795,7 @@ class ObjectReferenceTest(PyjdbTestBase):
         get_values_resp = self.jdwp.ObjectReference.GetValues({
             "object": self.test_object_id,
             "fields": field_ids})
-        self.assertEquals(get_values_resp["values"][0]["value"], 100)
+        self.assertEquals(get_values_resp["values"][0]["value"]["value"], 100)
 
     def test_object_reference_disable_collection(self):
         resp = self.jdwp.ObjectReference.DisableCollection({
@@ -844,7 +848,7 @@ class StringReferenceTest(PyjdbTestBase):
             "fieldID": string_field["fieldID"]}]
         string_object_id = self.jdwp.ReferenceType.GetValues({
             "refType": self.test_class_id,
-            "fields": field_ids})["values"][0]["value"]
+            "fields": field_ids})["values"][0]["value"]["value"]
         resp = self.jdwp.StringReference.Value({
             "stringObject": string_object_id})
         self.assertEquals(resp["stringValue"], u"Hello")

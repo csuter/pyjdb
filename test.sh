@@ -31,6 +31,6 @@ PYTHONPATH="." python -m unittest -v $TEST_ARGS
 ps aux \
   | grep java \
   | grep -v grep \
-  | grep 'fib\.jar' \
+  | grep 'Test' \
   | awk '{print $2}' \
   | xargs -n1 kill -9

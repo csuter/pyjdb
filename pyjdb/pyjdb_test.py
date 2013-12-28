@@ -66,22 +66,55 @@ class PyjdbTestBase(unittest.TestCase):
             time.sleep(sleep)
         return False
 
+    def __pick_port(self):
+        port_picker_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        port_picker_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        port_picker_socket.bind(("localhost", 0))
+        port = port_picker_socket.getsockname()[1]
+        port_picker_socket.close()
+        return port
+
     def setUp(self):
         # boot up the sample java program in target jvm
         self.devnull = open(subprocess.os.devnull, "r")
+        port = 5005
         self.test_target_subprocess = subprocess.Popen([
             "/usr/bin/java", "-cp", TEST_TMP_DIRNAME,
-            "-Xrunjdwp:transport=dt_socket,server=y,suspend=y,address=5005",
+            "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=%d" % port,
             self.debug_target_main_class],
-            stdout = self.devnull, stderr = self.devnull)
+            stdout=self.devnull, stderr=self.devnull)
+        self.jdwp = pyjdb.Jdwp("localhost", port)
         try:
-            self.wait_for_server("localhost", 5005)
+            self.jdwp.initialize()
+        except pyjdb.Error as e:
+            self.test_target_subprocess.send_signal(signal.SIGKILL)
+            self.test_target_subprocess.wait()
+            self.devnull.close()
+            raise e
+
+    def setUp(self):
+        port = self.__pick_port()
+        jvm_args = "-Xrunjdwp:transport=%s" % ",".join([
+                "dt_socket",
+                "server=y",
+                "suspend=y",
+                "address=%d" % port])
+        # boot up the sample java program in target jvm, redirect stdout and
+        # stderr to devnull
+        self.devnull = open(subprocess.os.devnull, "r")
+        self.test_target_subprocess = subprocess.Popen(
+            ["/usr/bin/java", "-cp", TEST_TMP_DIRNAME, jvm_args,
+                    self.debug_target_main_class],
+            stdout = self.devnull,
+            stderr = self.devnull)
+        try:
+            self.wait_for_server("localhost", port)
         except socket.error as e:
             # something's wrong; let's try to kill the target jvm (tearDown
             # won't be called if we fail) and bail.
             self.test_target_subprocess.send_signal(signal.SIGKILL)
             raise e
-        self.jdwp = pyjdb.Jdwp("localhost", 5005)
+        self.jdwp = pyjdb.Jdwp("localhost", port)
         self.jdwp.initialize();
 
     def tearDown(self):

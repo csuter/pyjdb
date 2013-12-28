@@ -89,19 +89,19 @@ class PyjdbTestBase(unittest.TestCase):
         _, test_class_prepare_event = self.jdwp.await_event(matcher)
         return test_class_prepare_event["events"][0]["ClassPrepare"]
 
-    def set_breakpoint_in_main(self, main_class_name):
-        self.resume_and_await_class_load(main_class_name, self.jdwp.SuspendPolicy.ALL)
-        signature = "L%s;" % main_class_name
+    def set_breakpoint_in_method(self, class_name, method_name):
+        self.resume_and_await_class_load(class_name, self.jdwp.SuspendPolicy.ALL)
+        signature = "L%s;" % class_name
         resp = self.jdwp.VirtualMachine.ClassesBySignature({
-                "signature": "L%s;" % main_class_name})
-        main_class_id = resp["classes"][0]["typeID"]
-        resp = self.jdwp.ReferenceType.Methods({"refType": main_class_id})
+                "signature": "L%s;" % class_name})
+        class_id = resp["classes"][0]["typeID"]
+        resp = self.jdwp.ReferenceType.Methods({"refType": class_id})
         methods_by_name = dict([(method["name"], method) for method in
                 resp["declared"]])
-        main_method = methods_by_name["main"]
+        method = methods_by_name[method_name]
         resp = self.jdwp.Method.LineTable({
-                "refType": main_class_id,
-                "methodID": main_method["methodID"]})
+                "refType": class_id,
+                "methodID": method["methodID"]})
         initial_index = resp["lines"][0]["lineCodeIndex"]
         resp = self.jdwp.EventRequest.Set({
                 "eventKind": self.jdwp.EventKind.BREAKPOINT,
@@ -109,8 +109,8 @@ class PyjdbTestBase(unittest.TestCase):
                 "modifiers": [{
                         "modKind": 7,
                         "typeTag": self.jdwp.TypeTag.CLASS,
-                        "classID": main_class_id,
-                        "methodID": main_method["methodID"],
+                        "classID": class_id,
+                        "methodID": method["methodID"],
                         "index": initial_index}]})
         def matcher(event_raw):
             _, event = event_raw
@@ -121,6 +121,8 @@ class PyjdbTestBase(unittest.TestCase):
         _, breakpoint_events = self.jdwp.await_event(matcher)
         return breakpoint_events["events"][0]["Breakpoint"]
 
+    def set_breakpoint_in_main(self, main_class_name):
+        return self.set_breakpoint_in_method(main_class_name, "main")
 
 class VirtualMachineTest(PyjdbTestBase):
     def test_virtual_machine_version(self):
@@ -475,6 +477,7 @@ class ReferenceTypeTest(PyjdbTestBase):
         self.assertGreater(len(constant_pool_resp["bytes"]), 0)
         self.assertIn("cpbytes", constant_pool_resp["bytes"][0])
 
+
 class ClassTypeTest(PyjdbTestBase):
     @classmethod
     def setUpClass(cls):
@@ -585,6 +588,7 @@ class ClassTypeTest(PyjdbTestBase):
             "fields": field_ids})
         self.assertEquals(get_values_resp["values"][0]["value"]["value"], 1234)
 
+
 class ArrayTypeTest(PyjdbTestBase):
     def test_array_type_new_instance(self):
         all_classes_response = self.jdwp.VirtualMachine.AllClasses()
@@ -599,6 +603,7 @@ class ArrayTypeTest(PyjdbTestBase):
         self.assertIn("newArray", new_instance_resp)
         self.assertIn("objectID", new_instance_resp["newArray"])
         self.assertIn("typeTag", new_instance_resp["newArray"])
+
 
 class MethodTest(PyjdbTestBase):
     @classmethod
@@ -685,6 +690,7 @@ class MethodTest(PyjdbTestBase):
         self.assertIn("name", variable_table_resp["slots"][0])
         self.assertIn("signature", variable_table_resp["slots"][0])
         self.assertIn("genericSignature", variable_table_resp["slots"][0])
+
 
 class ObjectReferenceTest(PyjdbTestBase):
     @classmethod
@@ -818,6 +824,7 @@ class ObjectReferenceTest(PyjdbTestBase):
             "maxReferrers": 0})
         self.assertIn("referringObjects", resp)
 
+
 class StringReferenceTest(PyjdbTestBase):
     @classmethod
     def setUpClass(cls):
@@ -853,39 +860,407 @@ class StringReferenceTest(PyjdbTestBase):
             "stringObject": string_object_id})
         self.assertEquals(resp["stringValue"], u"Hello")
 
-class ThreadReferenceTest(PyjdbTestBase):
-    def test_thread_reference_name(self):
-        pass
 
-    #def test_thread_reference_suspend(self):
-    #def test_thread_reference_resume(self):
-    #def test_thread_reference_status(self):
-    #def test_thread_reference_thread_group(self):
-    #def test_thread_reference_frames(self):
-    #def test_thread_reference_frame_count(self):
-    #def test_thread_reference_owned_monitors(self):
-    #def test_thread_reference_current_contended_monitor(self):
-    #def test_thread_reference_stop(self):
-    #def test_thread_reference_interrupt(self):
-    #def test_thread_reference_suspend_count(self):
-    #def test_thread_reference_owned_monitors_stack_depth_info(self):
-    #def test_thread_reference_force_early_return(self):
-    #def test_thread_group_reference_name(self):
-    #def test_thread_group_reference_parent(self):
-    #def test_thread_group_reference_children(self):
-    #def test_array_reference_length(self):
-    #def test_array_reference_get_values(self):
-    #def test_array_reference_set_values(self):
-    #def test_class_loader_reference_visible_classes(self):
-    #def test_event_request_set(self):
-    #def test_event_request_clear(self):
-    #def test_event_request_clear_all_breakpoints(self):
-    #def test_stack_frame_get_values(self):
-    #def test_stack_frame_set_values(self):
-    #def test_stack_frame_this_object(self):
-    #def test_stack_frame_pop_frames(self):
-    #def test_class_object_reference_reflected_type(self):
-    #def test_event_composite(self):
+class ThreadReferenceTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class ThreadReferenceTest {
+          public static Thread childThread = new Thread(new Runnable() {
+            public void run() {
+              synchronized (this) {
+                while (true) {
+                  try {
+                    Thread.sleep(1000);
+                  } catch (InterruptedException e) {
+                    return;
+                  }
+                }
+              }
+            }
+          }, "childThread");
+          
+          static {
+            childThread.start();
+          }
+
+          public static void main(String[] args) throws Exception {
+            while (true) {
+              Thread.sleep(1000);
+            }
+          }
+        }"""
+        cls.debug_target_main_class = "ThreadReferenceTest"
+        super(ThreadReferenceTest, cls).setUpClass()
+
+    def setUp(self):
+        super(ThreadReferenceTest, self).setUp()
+        self.breakpoint_event = self.set_breakpoint_in_main(
+                "ThreadReferenceTest")
+        self.threads = self.jdwp.VirtualMachine.AllThreads()["threads"]
+        self.threads_by_name = {}
+        for thread in self.threads:
+            name = self.jdwp.ThreadReference.Name({
+                    "thread": thread["thread"]})["threadName"]
+            self.threads_by_name[name] = thread
+        self.child_thread_id = self.threads_by_name["childThread"]["thread"]
+        self.main_thread_id = self.threads_by_name["main"]["thread"]
+
+    def test_name(self):
+        self.assertIn("childThread", self.threads_by_name)
+
+    def test_suspend(self):
+        suspend_count = self.jdwp.ThreadReference.SuspendCount({
+                "thread": self.child_thread_id})["suspendCount"]
+        # the thread should already be suspended due to breakpoint
+        self.assertEquals(suspend_count, 1)
+        self.jdwp.ThreadReference.Suspend({
+                "thread": self.child_thread_id})
+        suspend_count = self.jdwp.ThreadReference.SuspendCount({
+                "thread": self.child_thread_id})["suspendCount"]
+        # the thread should already be suspended due to breakpoint
+        self.assertEquals(suspend_count, 2)
+
+    def test_resume(self):
+        suspend_count = self.jdwp.ThreadReference.SuspendCount({
+                "thread": self.child_thread_id})["suspendCount"]
+        # the thread should already be suspended due to breakpoint
+        self.assertEquals(suspend_count, 1)
+        self.jdwp.ThreadReference.Resume({
+                "thread": self.child_thread_id})
+        suspend_count = self.jdwp.ThreadReference.SuspendCount({
+                "thread": self.child_thread_id})["suspendCount"]
+        # the thread should already be suspended due to breakpoint
+        self.assertEquals(suspend_count, 0)
+
+    def test_status(self):
+        resp = self.jdwp.ThreadReference.Status({
+                "thread": self.child_thread_id})
+        self.assertIn("threadStatus", resp)
+        self.assertIn("suspendStatus", resp)
+
+    def test_thread_group(self):
+        resp = self.jdwp.ThreadReference.ThreadGroup({
+                "thread": self.child_thread_id})
+        self.assertIn("group", resp)
+
+    def test_frames(self):
+        resp = self.jdwp.ThreadReference.Frames({
+                "thread": self.main_thread_id,
+                "startFrame": 0,
+                "length": -1})
+        self.assertIn("frames", resp)
+        self.assertGreater(len(resp["frames"]), 0)
+        self.assertIn("classID", resp["frames"][0])
+        self.assertIn("index", resp["frames"][0])
+        self.assertIn("typeTag", resp["frames"][0])
+        self.assertIn("methodID", resp["frames"][0])
+        self.assertIn("frameID", resp["frames"][0])
+
+    def test_frame_count(self):
+        resp = self.jdwp.ThreadReference.FrameCount({
+                "thread": self.main_thread_id})
+        self.assertIn("frameCount", resp)
+
+    def test_owned_monitors(self):
+        resp = self.jdwp.ThreadReference.OwnedMonitors({
+                "thread": self.child_thread_id})
+        self.assertIn("owned", resp)
+
+    def test_current_contended_monitor(self):
+        resp = self.jdwp.ThreadReference.CurrentContendedMonitor({
+                "thread": self.child_thread_id})
+        self.assertIn("monitor", resp)
+        self.assertIn("objectID", resp["monitor"])
+        self.assertIn("typeTag", resp["monitor"])
+
+    def test_stop(self):
+        exception_class_id = self.jdwp.VirtualMachine.ClassesBySignature({
+                "signature": "Ljava/lang/Exception;"})["classes"][0]["typeID"]
+        methods_resp = self.jdwp.ReferenceType.Methods({
+                "refType": exception_class_id})
+        for method in methods_resp["declared"]:
+            if method["name"] == u"<init>" and method["signature"] == u"()V":
+                exception_constructor_id = method["methodID"]
+        self.assertIsNotNone(exception_constructor_id)
+        exception_instance = self.jdwp.ClassType.NewInstance({
+                "clazz": exception_class_id,
+                "thread": self.breakpoint_event["thread"],
+                "methodID": exception_constructor_id,
+                "arguments": [],
+                "options": self.jdwp.InvokeOptions.INVOKE_SINGLE_THREADED})[
+                        "newObject"]
+        exception_object_id = exception_instance["objectID"]
+        self.jdwp.ThreadReference.Stop({
+                "thread": self.child_thread_id,
+                "throwable": exception_object_id})
+
+    def test_interrupt(self):
+        self.jdwp.ThreadReference.Interrupt({
+                "thread": self.child_thread_id})
+
+    def test_suspend_count(self):
+        suspend_count = self.jdwp.ThreadReference.SuspendCount({
+                "thread": self.child_thread_id})["suspendCount"]
+        self.assertEquals(suspend_count, 1)
+
+    def test_owned_monitors_stack_depth_info(self):
+        resp = self.jdwp.ThreadReference.OwnedMonitorsStackDepthInfo({
+                "thread": self.child_thread_id})
+        self.assertIn("owned", resp)
+
+    def test_force_early_return(self):
+        resp = self.jdwp.ThreadReference.ForceEarlyReturn({
+                "thread": self.main_thread_id,
+                "value": {
+                        "typeTag": self.jdwp.Tag.VOID,
+                        "value": None}})
+        self.assertIsNotNone(resp)
+
+
+class ThreadGroupReferenceTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class ThreadGroupReferenceTest {
+          public static void main(String[] args) throws Exception {
+            while (true) {
+              Thread.sleep(1000);
+            }
+          }
+        }"""
+        cls.debug_target_main_class = "ThreadGroupReferenceTest"
+        super(ThreadGroupReferenceTest, cls).setUpClass()
+
+    def setUp(self):
+        super(ThreadGroupReferenceTest, self).setUp()
+        resp = self.jdwp.VirtualMachine.TopLevelThreadGroups()
+        self.main_thread_group_id = resp["groups"][0]["group"]
+
+    def test_name(self):
+        resp = self.jdwp.ThreadGroupReference.Name({
+                "group": self.main_thread_group_id})
+        self.assertIn("groupName", resp)
+
+    def test_parent(self):
+        resp = self.jdwp.ThreadGroupReference.Parent({
+                "group": self.main_thread_group_id})
+        self.assertIn("parentGroup", resp)
+
+    def test_children(self):
+        resp = self.jdwp.ThreadGroupReference.Children({
+                "group": self.main_thread_group_id})
+        self.assertIn("childGroups", resp)
+        self.assertGreater(len(resp["childGroups"]), 0)
+        self.assertIn("childGroup", resp["childGroups"][0])
+        self.assertIn("childThreads", resp)
+        self.assertGreater(len(resp["childThreads"]), 0)
+        self.assertIn("childThread", resp["childThreads"][0])
+
+
+class ArrayReferenceTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class ArrayReferenceTest {
+          public static int[] integers = {1, 1, 2, 3, 5};
+          public static String[] strings = {
+              "Hello", "Goodbye", "Huh?", null, "..."};
+
+          public static void main(String[] args) throws Exception {
+            while (true) {
+              Thread.sleep(1000);
+            }
+          }
+        }
+        """
+        cls.debug_target_main_class = "ArrayReferenceTest"
+        super(ArrayReferenceTest, cls).setUpClass()
+
+    def setUp(self):
+        super(ArrayReferenceTest, self).setUp()
+        self.breakpoint_event = self.set_breakpoint_in_main(
+                "ArrayReferenceTest")
+        fields = self.jdwp.ReferenceType.Fields({
+                "refType": self.breakpoint_event["classID"]})["declared"]
+        field_ids = [{"fieldID": field["fieldID"]} for field in fields]
+        resp = self.jdwp.ReferenceType.GetValues({
+                "refType": self.breakpoint_event["classID"],
+                "fields": field_ids})
+        self.integers_array_reference = resp["values"][0]["value"]["value"]
+        self.strings_array_reference = resp["values"][1]["value"]["value"]
+
+    def test_length(self):
+        resp = self.jdwp.ArrayReference.Length({
+                "arrayObject": self.integers_array_reference})
+        self.assertIn("arrayLength", resp)
+        self.assertEquals(resp["arrayLength"], 5)
+        resp = self.jdwp.ArrayReference.Length({
+                "arrayObject": self.strings_array_reference})
+        self.assertIn("arrayLength", resp)
+        self.assertEquals(resp["arrayLength"], 5)
+
+    def test_get_values(self):
+        resp = self.jdwp.ArrayReference.GetValues({
+                "arrayObject": self.integers_array_reference,
+                "firstIndex": 0,
+                "length": 4})
+        self.assertIn("values", resp)
+        self.assertEquals(resp["values"], (1, 1, 2, 3))
+        resp = self.jdwp.ArrayReference.GetValues({
+                "arrayObject": self.strings_array_reference,
+                "firstIndex": 0,
+                "length": 4})
+        self.assertIn("values", resp)
+
+    def test_set_values(self):
+        resp = self.jdwp.ArrayReference.SetValues({
+                "arrayObject": self.integers_array_reference,
+                "firstIndex": 1,
+                "values": [{
+                        "value": {
+                                "typeTag": self.jdwp.Tag.INT,
+                                "value": 2}}]})
+        resp = self.jdwp.ArrayReference.GetValues({
+                "arrayObject": self.integers_array_reference,
+                "firstIndex": 0,
+                "length": 5})
+        self.assertIn("values", resp)
+        self.assertEquals(resp["values"], (1, 2, 2, 3, 5))
+
+
+class ClassLoaderReferenceTest(PyjdbTestBase):
+    def setUp(self):
+        super(ClassLoaderReferenceTest, self).setUp()
+        self.breakpoint_event = self.set_breakpoint_in_main("PyjdbTest")
+        self.test_class_id = self.breakpoint_event["classID"]
+
+    def test_visible_classes(self):
+        resp = self.jdwp.ReferenceType.ClassLoader({
+                "refType": self.test_class_id})
+        class_loader_id = resp["classLoader"]
+        resp = self.jdwp.ClassLoaderReference.VisibleClasses({
+                "classLoaderObject": class_loader_id})
+        self.assertIn("classes", resp)
+        self.assertGreater(len(resp["classes"]), 0)
+        cls = resp["classes"][0]
+        self.assertIn("typeID", cls)
+        self.assertIn("refTypeTag", cls)
+
+
+class StackFrameTest(PyjdbTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.debug_target_code = """
+        public class StackFrameTest {
+          public static void main(String[] args) throws Exception {
+            int i = 10;
+            method1(i);
+          }
+
+          public static void method1(int a) throws Exception {
+            int j = a + 10;
+            method2(j);
+          }
+
+          public static void method2(int b) throws Exception {
+            int k = b + 10;
+            method3(k);
+          }
+
+          public static void method3(int c) throws Exception {
+            int l = c + 10;
+            while (true) {
+              Thread.sleep(1000);
+              l += 10;
+            }
+          }
+        }"""
+        cls.debug_target_main_class = "StackFrameTest"
+        super(StackFrameTest, cls).setUpClass()
+
+    def setUp(self):
+        super(StackFrameTest, self).setUp()
+        self.breakpoint_event = self.set_breakpoint_in_method(
+                "StackFrameTest", "method3")
+        self.thread_id = self.breakpoint_event["thread"]
+        self.frames = self.jdwp.ThreadReference.Frames({
+                "thread": self.thread_id,
+                "startFrame": 0,
+                "length": -1})["frames"]
+
+    def test_get_values(self):
+        for frame in self.frames:
+            resp = self.jdwp.Method.VariableTable({
+                    "refType": frame["classID"],
+                    "methodID": frame["methodID"]})
+            frame_index = frame["index"]
+            slots = [{
+                    "slot": slot["slot"],
+                    "sigbyte": ord(slot["signature"][0])} for
+                            slot in resp["slots"]
+                    if slot["codeIndex"] <= frame_index and
+                            frame_index < slot["codeIndex"] + slot["length"]]
+            for slot in slots:
+                resp = self.jdwp.StackFrame.GetValues({
+                        "thread": self.thread_id,
+                        "frame": frame["frameID"],
+                        "slots": slots})
+                for value in resp["values"]:
+                    self.assertIn("slotValue", value)
+                    self.assertIn("value", value["slotValue"])
+                    self.assertIn("typeTag", value["slotValue"])
+
+    def test_set_values(self):
+        frame = self.frames[0]
+        frame_index = frame["index"]
+        resp = self.jdwp.Method.VariableTable({
+                "refType": frame["classID"],
+                "methodID": frame["methodID"]})
+        slots = [{
+                "slot": slot["slot"],
+                "sigbyte": ord(slot["signature"][0])} for slot in resp["slots"]
+                if slot["codeIndex"] <= frame_index and
+                        frame_index < slot["codeIndex"] + slot["length"]]
+        resp = self.jdwp.StackFrame.GetValues({
+                "thread": self.thread_id,
+                "frame": frame["frameID"],
+                "slots": slots})
+        self.assertEquals(resp["values"][0]["slotValue"]["value"], 30)
+        for slot in slots:
+            self.jdwp.StackFrame.SetValues({
+                    "thread": self.thread_id,
+                    "frame": frame["frameID"],
+                    "slotValues": [{
+                            "slot": slot["slot"],
+                            "slotValue": {
+                                    "typeTag": self.jdwp.Tag.INT,
+                                    "value": 55}}]})
+        resp = self.jdwp.StackFrame.GetValues({
+                "thread": self.thread_id,
+                "frame": frame["frameID"],
+                "slots": slots})
+        self.assertEquals(resp["values"][0]["slotValue"]["value"], 55)
+
+    def test_this_object(self):
+        frame = self.frames[0]
+        resp = self.jdwp.StackFrame.ThisObject({
+                "thread": self.thread_id,
+                "frame": frame["frameID"]})
+        self.assertIn("objectThis", resp)
+
+    def test_pop_frames(self):
+        top_frame_id = self.frames[0]["frameID"]
+        self.assertEquals(len(self.frames), 4)
+        self.jdwp.StackFrame.PopFrames({
+                "thread": self.thread_id,
+                "frame": top_frame_id})
+        resp = self.jdwp.ThreadReference.Frames({
+                "thread": self.thread_id,
+                "startFrame": 0,
+                "length": -1})["frames"]
+        # now there should only be 3 frames
+        self.assertEquals(len(resp), 3)
 
 if __name__ == "__main__":
     unittest.main()

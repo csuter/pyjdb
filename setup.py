@@ -9,6 +9,9 @@ distutils.core.setup(
     package_dir = {
         'pyjdb': 'pyjdb',
     },
+    package_data = {
+        'pyjdb': ['specs/jdwp.spec*'],
+    },
     packages = [ \
         'pyjdb',
     ],

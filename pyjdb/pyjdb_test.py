@@ -2,6 +2,7 @@ import logging
 import os
 import pyjdb
 import signal
+import socket
 import string
 import subprocess
 import tempfile
@@ -49,6 +50,22 @@ class PyjdbTestBase(unittest.TestCase):
         build_test_code = subprocess.check_output(
             "javac -g:source,lines,vars %s" % test_source_filepath, shell=True)
 
+    def wait_for_server(self, host, port, max_tries=10, sleep=.1, timeout=10.0):
+        start_time = time.time()
+        num_tries = 0
+        while num_tries < max_tries and (time.time() - start_time) < timeout:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            try:
+                sock.connect((host, port))
+                sock.close()
+                return True
+            except socket.error as e:
+                pass
+            num_tries += 1
+            time.sleep(sleep)
+        return False
+
     def setUp(self):
         # boot up the sample java program in target jvm
         self.devnull = open(subprocess.os.devnull, "r")
@@ -57,6 +74,13 @@ class PyjdbTestBase(unittest.TestCase):
             "-Xrunjdwp:transport=dt_socket,server=y,suspend=y,address=5005",
             self.debug_target_main_class],
             stdout = self.devnull, stderr = self.devnull)
+        try:
+            self.wait_for_server("localhost", 5005)
+        except socket.error as e:
+            # something's wrong; let's try to kill the target jvm (tearDown
+            # won't be called if we fail) and bail.
+            self.test_target_subprocess.send_signal(signal.SIGKILL)
+            raise e
         self.jdwp = pyjdb.Jdwp("localhost", 5005)
         self.jdwp.initialize();
 
@@ -470,6 +494,7 @@ class ReferenceTypeTest(PyjdbTestBase):
         self.assertIsInstance(class_file_version_resp["minorVersion"], int)
 
     def test_reference_type_constant_pool(self):
+        print(self.thread_class_id)
         constant_pool_resp = self.jdwp.ReferenceType.ConstantPool({
                 "refType": self.thread_class_id})
         self.assertIn("count", constant_pool_resp)

@@ -494,7 +494,6 @@ class ReferenceTypeTest(PyjdbTestBase):
         self.assertIsInstance(class_file_version_resp["minorVersion"], int)
 
     def test_reference_type_constant_pool(self):
-        print(self.thread_class_id)
         constant_pool_resp = self.jdwp.ReferenceType.ConstantPool({
                 "refType": self.thread_class_id})
         self.assertIn("count", constant_pool_resp)

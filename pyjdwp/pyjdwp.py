@@ -8,11 +8,11 @@ import threading
 import time
 
 class Error(Exception):
-    """Pyjdb module-level error"""
+    """Pyjdwp module-level error"""
     pass
 
 class Timeout(Error):
-    """Pyjdb module-level error used specificallly for timeouts"""
+    """Pyjdwp module-level error used specificallly for timeouts"""
     pass
 
 EVENT_MAGIC_NUMBER = 0x4064

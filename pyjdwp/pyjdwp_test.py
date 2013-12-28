@@ -1,6 +1,6 @@
 import logging 
 import os
-import pyjdb
+import pyjdwp
 import signal
 import socket
 import string
@@ -11,18 +11,18 @@ import unittest
 
 TEST_TMP_DIRNAME = tempfile.mkdtemp()
 
-class PyjdbTestBase(unittest.TestCase):
-    """Base class for pyjdb package tests.
+class PyjdwpTestBase(unittest.TestCase):
+    """Base class for pyjdwp package tests.
     
     Handles the work of compiling the test code once for each test class, and
     starting the java process for each test case. Namely, each test class
-    derives from PyjdbTestBase. PyjdbTestBase has a default implementation of
+    derives from PyjdwpTestBase. PyjdwpTestBase has a default implementation of
     the TestCase @classmethod setUpClass() that creates a default sample test
     java class definition, writes it to a file, and calls javac on it. The
     setUp method then starts a jvm in debug mode running the test code once for
     each test method.
 
-    Subclasses of PyjdbTestBase may override setUpClass and redefine
+    Subclasses of PyjdwpTestBase may override setUpClass and redefine
     'debug_target_code' (the java code to compile and debug) and
     'debug_target_main_class' (a class containing a public static void main
     method in the test java code) to fit the needs of a particular test case.
@@ -32,7 +32,7 @@ class PyjdbTestBase(unittest.TestCase):
     def setUpClass(cls):
         if not hasattr(cls, "debug_target_code"):
             cls.debug_target_code = """
-            public class PyjdbTest {
+            public class PyjdwpTest {
               public static void main(String[] args) throws Exception {
                 while (true) {
                   Thread.sleep(1000);
@@ -40,7 +40,7 @@ class PyjdbTestBase(unittest.TestCase):
               }
             }
             """
-            cls.debug_target_main_class = "PyjdbTest"
+            cls.debug_target_main_class = "PyjdwpTest"
         test_source_filename = "%s.java" % cls.debug_target_main_class
         test_class_filename = "%s.class" % cls.debug_target_main_class
         test_source_filepath = os.path.join(TEST_TMP_DIRNAME, test_source_filename)
@@ -83,10 +83,10 @@ class PyjdbTestBase(unittest.TestCase):
             "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=%d" % port,
             self.debug_target_main_class],
             stdout=self.devnull, stderr=self.devnull)
-        self.jdwp = pyjdb.Jdwp("localhost", port)
+        self.jdwp = pyjdwp.Jdwp("localhost", port)
         try:
             self.jdwp.initialize()
-        except pyjdb.Error as e:
+        except pyjdwp.Error as e:
             self.test_target_subprocess.send_signal(signal.SIGKILL)
             self.test_target_subprocess.wait()
             self.devnull.close()
@@ -114,7 +114,7 @@ class PyjdbTestBase(unittest.TestCase):
             # won't be called if we fail) and bail.
             self.test_target_subprocess.send_signal(signal.SIGKILL)
             raise e
-        self.jdwp = pyjdb.Jdwp("localhost", port)
+        self.jdwp = pyjdwp.Jdwp("localhost", port)
         self.jdwp.initialize();
 
     def tearDown(self):
@@ -181,7 +181,7 @@ class PyjdbTestBase(unittest.TestCase):
     def set_breakpoint_in_main(self, main_class_name):
         return self.set_breakpoint_in_method(main_class_name, "main")
 
-class VirtualMachineTest(PyjdbTestBase):
+class VirtualMachineTest(PyjdwpTestBase):
     def test_virtual_machine_version(self):
         system_java_version = subprocess.check_output(
             "java -version 2>&1", shell=True)
@@ -370,7 +370,7 @@ class VirtualMachineTest(PyjdbTestBase):
         pass
 
 
-class ReferenceTypeTest(PyjdbTestBase):
+class ReferenceTypeTest(PyjdwpTestBase):
     def setUp(self):
         super(ReferenceTypeTest, self).setUp()
         self.string_class_signature = u"Ljava/lang/String;"
@@ -535,7 +535,7 @@ class ReferenceTypeTest(PyjdbTestBase):
         self.assertIn("cpbytes", constant_pool_resp["bytes"][0])
 
 
-class ClassTypeTest(PyjdbTestBase):
+class ClassTypeTest(PyjdwpTestBase):
     @classmethod
     def setUpClass(cls):
         cls.debug_target_code = """
@@ -646,7 +646,7 @@ class ClassTypeTest(PyjdbTestBase):
         self.assertEquals(get_values_resp["values"][0]["value"]["value"], 1234)
 
 
-class ArrayTypeTest(PyjdbTestBase):
+class ArrayTypeTest(PyjdwpTestBase):
     def test_array_type_new_instance(self):
         all_classes_response = self.jdwp.VirtualMachine.AllClasses()
         self.assertIn("classes", all_classes_response)
@@ -662,7 +662,7 @@ class ArrayTypeTest(PyjdbTestBase):
         self.assertIn("typeTag", new_instance_resp["newArray"])
 
 
-class MethodTest(PyjdbTestBase):
+class MethodTest(PyjdwpTestBase):
     @classmethod
     def setUpClass(cls):
         cls.debug_target_code = """
@@ -749,7 +749,7 @@ class MethodTest(PyjdbTestBase):
         self.assertIn("genericSignature", variable_table_resp["slots"][0])
 
 
-class ObjectReferenceTest(PyjdbTestBase):
+class ObjectReferenceTest(PyjdwpTestBase):
     @classmethod
     def setUpClass(cls):
         cls.debug_target_code = """
@@ -882,7 +882,7 @@ class ObjectReferenceTest(PyjdbTestBase):
         self.assertIn("referringObjects", resp)
 
 
-class StringReferenceTest(PyjdbTestBase):
+class StringReferenceTest(PyjdwpTestBase):
     @classmethod
     def setUpClass(cls):
         cls.debug_target_code = """
@@ -918,7 +918,7 @@ class StringReferenceTest(PyjdbTestBase):
         self.assertEquals(resp["stringValue"], u"Hello")
 
 
-class ThreadReferenceTest(PyjdbTestBase):
+class ThreadReferenceTest(PyjdwpTestBase):
     @classmethod
     def setUpClass(cls):
         cls.debug_target_code = """
@@ -1075,7 +1075,7 @@ class ThreadReferenceTest(PyjdbTestBase):
         self.assertIsNotNone(resp)
 
 
-class ThreadGroupReferenceTest(PyjdbTestBase):
+class ThreadGroupReferenceTest(PyjdwpTestBase):
     @classmethod
     def setUpClass(cls):
         cls.debug_target_code = """
@@ -1115,7 +1115,7 @@ class ThreadGroupReferenceTest(PyjdbTestBase):
         self.assertIn("childThread", resp["childThreads"][0])
 
 
-class ArrayReferenceTest(PyjdbTestBase):
+class ArrayReferenceTest(PyjdwpTestBase):
     @classmethod
     def setUpClass(cls):
         cls.debug_target_code = """
@@ -1186,10 +1186,10 @@ class ArrayReferenceTest(PyjdbTestBase):
         self.assertEquals(resp["values"], (1, 2, 2, 3, 5))
 
 
-class ClassLoaderReferenceTest(PyjdbTestBase):
+class ClassLoaderReferenceTest(PyjdwpTestBase):
     def setUp(self):
         super(ClassLoaderReferenceTest, self).setUp()
-        self.breakpoint_event = self.set_breakpoint_in_main("PyjdbTest")
+        self.breakpoint_event = self.set_breakpoint_in_main("PyjdwpTest")
         self.test_class_id = self.breakpoint_event["classID"]
 
     def test_visible_classes(self):
@@ -1205,7 +1205,7 @@ class ClassLoaderReferenceTest(PyjdbTestBase):
         self.assertIn("refTypeTag", cls)
 
 
-class StackFrameTest(PyjdbTestBase):
+class StackFrameTest(PyjdwpTestBase):
     @classmethod
     def setUpClass(cls):
         cls.debug_target_code = """

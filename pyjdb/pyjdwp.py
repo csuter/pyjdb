@@ -1,4 +1,3 @@
-import logging as log
 import pkg_resources
 import pyparsing
 import re
@@ -14,8 +13,6 @@ class Error(Exception):
 class Timeout(Error):
     """Pyjdwp module-level error used specificallly for timeouts"""
     pass
-
-EVENT_MAGIC_NUMBER = 0x4064
 
 STRUCT_FMTS_BY_SIZE_UNSIGNED = {1: "B", 4: "I", 8: "Q"}
 
@@ -37,78 +34,16 @@ STRUCT_FMT_BY_TYPE_TAG = {
         'c': "?"}
 
 
-class Jdwp(object):
-    ACCESS_MODIFIER_PUBLIC = 0x0001
-    ACCESS_MODIFIER_FINAL = 0x0010
-    ACCESS_MODIFIER_SUPER = 0x0020 # old invokespecial instruction semantics (Java 1.0x?)
-    ACCESS_MODIFIER_INTERFACE = 0x0200
-    ACCESS_MODIFIER_ABSTRACT = 0x0400
-    ACCESS_MODIFIER_SYNTHETIC = 0x1000 
-    ACCESS_MODIFIER_ANNOTATION = 0x2000
-    ACCESS_MODIFIER_ENUM = 0x4000
-    ACCESS_MODIFIERS = {
-        0x0001: "public",
-        0x0010: "final",
-        0x0020: "super",
-        0x0200: "interface",
-        0x0400: "abstract",
-        0x1000: "synthetic",
-        0x2000: "annotation",
-        0x4000: "enum"
-    }
-
-    def __init__(self, host="localhost", jvm_port=5005, event_cb=None,
-            timeout=10.0):
-        self.__timeout = timeout
-        self.__jdwp_connection = JdwpConnection(
-                host, jvm_port, timeout, event_cb=event_cb)
-
-    def initialize(self):
-        self.__jdwp_connection.initialize()
-        command_sets = self.__jdwp_connection.jdwp_spec.command_sets
-        constant_sets = self.__jdwp_connection.jdwp_spec.constant_sets
-        for command_set_name in command_sets:
-            command_set = command_sets[command_set_name]
-            setattr(self, command_set_name, GenericService(
-                    self.__jdwp_connection, command_set))
-        for constant_set_name in constant_sets:
-            constant_set = constant_sets[constant_set_name]
-            setattr(self, constant_set_name, GenericConstantSet(constant_set))
-
-    def disconnect(self):
-        self.__jdwp_connection.disconnect()
-
-    def await_event(self, matcher_fn):
-        start_time = time.time()
-        found_event = None
-        while found_event is None:
-            try:
-                self.__jdwp_connection.event_cv.acquire()
-                while not self.__jdwp_connection.events:
-                    if time.time() - start_time > self.__timeout:
-                        raise Timeout("Timed out awaiting event")
-                    self.__jdwp_connection.event_cv.wait(2.0)
-                for event in self.__jdwp_connection.events:
-                    if matcher_fn(event):
-                        found_event = event
-                        break
-                self.__jdwp_connection.events.remove(event)
-            except Timeout as t:
-                raise t
-            finally:
-                self.__jdwp_connection.event_cv.release()
-        return found_event
-                
-
 class GenericService(object):
-    def __init__(self, jdwp_connection, command_set):
-        self.__conn = jdwp_connection
+    def __init__(self, jdwp, command_set):
+        self.__jdwp = jdwp
         self.__command_set = command_set
         for cmd_name in self.__command_set.commands:
             def create_lambda(name):
-                return lambda data={}: self.__conn.command_request(
+                return lambda data={}: self.__jdwp.command_request(
                         self.__command_set.name, name, data)
             setattr(self, cmd_name, create_lambda(cmd_name))
+
 
 class GenericConstantSet(object):
     def __init__(self, constant_set):
@@ -116,108 +51,197 @@ class GenericConstantSet(object):
             constant = constant_set.constants[constant_name]
             setattr(self, constant_name, constant.value)
 
-class JdwpConnection(object):
-    def __init__(self, host, port, timeout=10.0, event_cb=None):
-        self.__host = host
-        self.__port = port
-        self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.__next_req_id = 1
-        self.__replies_by_req_id = {}
+
+class RequestIdGenerator(object):
+    def __init__(self):
+        self.__lock = threading.RLock()
+        self._next_id = 1
+
+    @property
+    def next_id(self):
+        with self.__lock:
+            result = self._next_id
+            self._next_id += 1
+        return result
+
+    @next_id.setter
+    def next_id(self, value):
+        with self.__lock:
+            self._next_id = value
+
+
+class Jdwp(object):
+    def __init__(self, host="localhost", port=5005, timeout=10.0):
         self.__timeout = timeout
-        self.__event_cb = event_cb
-        self.__request_lock = threading.Lock()
-        self.events = []
+        self.__request_id_generator = RequestIdGenerator()
+        self.__replies = {}
+        self.__conn = JdwpConnection(host, port, timeout, self.handle_packet)
+        self.__event_cv = threading.Condition()
+        self.__reply_cv = threading.Condition()
+        self.__events = []
 
     def initialize(self):
-        # open socket to jvm
-        self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.__socket.settimeout(1.0)
-        max_tries = 20
-        num_tries = 0
-        while True:
-            try:
-                self.__socket.connect((self.__host, self.__port))
-                break
-            except socket.error as e:
-                if num_tries > 20:
-                    raise Error("Failed to connect to %s:%s)" %
-                            (self.__host, self.__port))
-                pass
-            time.sleep(.1)
-            num_tries += 1
-
-        self.__handshake()
+        # As soon as we call this, events (e.g., vm_start) may be incoming.
+        self.__conn.initialize()
+        # TODO(cgs): push this wait() into connection init. connection init
+        # should ensure that it is connected to a valid, started vm. it should
+        # poll vm state (via vm cmd) while simultaneously listening for
+        # vm_start event, and proceed only when one of these shows vm is
+        # running. fail after specified timeout expires.
         self.__await_vm_start()
         version = self.__hardcoded_version_request()
-        self.jdwp_spec = JdwpSpec(version)
-        self.jdwp_spec.id_sizes = self.__hardcoded_id_sizes_request()
+        id_sizes = self.__hardcoded_id_sizes_request()
+        self.jdwp_spec = JdwpSpec(version, id_sizes)
+        for command_set_name in self.jdwp_spec.command_sets:
+            command_set = self.jdwp_spec.command_sets[command_set_name]
+            setattr(self, command_set_name, GenericService(self, command_set))
+        for constant_set_name in self.jdwp_spec.constant_sets:
+            constant_set = self.jdwp_spec.constant_sets[constant_set_name]
+            setattr(self, constant_set_name, GenericConstantSet(constant_set))
 
-        self.event_cv = threading.Condition()
-        self.reply_cv = threading.Condition()
-        self.__listening_lock = threading.Lock()
-        with self.__listening_lock:
-            self.__listening = True
-        self.__reader_thread = threading.Thread(
-                target = self.__listen,
-                name = "jdwp_listener")
-        self.__reader_thread.setDaemon(True)
-        self.__reader_thread.start()
+    def command_request(self, command_set_name, command_name, data):
+        command = self.jdwp_spec.lookup_command(command_set_name, command_name)
+        req_id = self.__request_id_generator.next_id
+        command_set_id = command.command_set_id
+        command_id = command.id
+        payload = command.encode(data)
+        self.__conn.send(req_id, command_set_id, command_id, payload)
+        reply_payload = self.__await_reply(req_id)
+        return command.decode(reply_payload)
 
+    def disconnect(self):
+        self.__conn.disconnect()
 
-    def __handshake(self):
-        handshake = b"JDWP-Handshake"
-        self.__socket.send(handshake)
-        data = self.__socket.recv(len(handshake))
-        if data != handshake:
-            self.__socket.close()
-            raise Error("Handshake failed")
+    def handle_packet(self, req_id, flags, err, payload):
+        if err == 0x4064:
+            with self.__event_cv:
+                self.__events.append((req_id, payload))
+                self.__event_cv.notify()
+            return
+        with self.__reply_cv:
+            if req_id in self.__replies:
+                raise Error("More than one reply packet for req_id %d" % req_id)
+            self.__replies[req_id] = (err, payload)
+            self.__reply_cv.notify()
+
+    def await_event(self, matcher_fn):
+        command = self.jdwp_spec.lookup_command("Event", "Composite")
+        start_time = time.time()
+        found_event = None
+        while found_event is None:
+            with self.__event_cv:
+                while not self.__events:
+                    if time.time() - start_time > self.__timeout:
+                        raise Timeout("Timed out awaiting event")
+                    self.__event_cv.wait(.1)
+                for jvm_req_id, event_payload in self.__events:
+                    event = command.decode(event_payload)
+                    if matcher_fn(event):
+                        found_event = (jvm_req_id, event_payload)
+                        break
+        self.__events.remove(found_event)
+        return event
 
     def __await_vm_start(self):
-        try:
-            vm_start_event_header = self.__socket.recv(11);
-        except socket.timeout as e:
-            # the vm was probably already started. if something's wrong we'll
-            # find out soon enough.
-            return
-        length, _, _, _ = struct.unpack(">IIBH", vm_start_event_header)
-        vm_start_event_data = self.__socket.recv(length - 11);
-        remainder_fmt = STRUCT_FMTS_BY_SIZE_UNSIGNED[length - 11 - 10]
-        _, _, event_kind, _, _ = struct.unpack(
-                ">BIBI" + remainder_fmt, vm_start_event_data)
-        if event_kind != 90:  # vm_start
-            raise Error("I...i don't know")
+        found_event = False
+        with self.__event_cv:
+            while not found_event:
+                for jvm_req_id, payload in self.__events:
+                    if len(payload) < 6:
+                        continue
+                    _, _, event_kind = struct.unpack(">BIB", payload[0 : 6])
+                    if event_kind == 90:  # vm_start
+                        found_event = True
+                        break
+                self.__event_cv.wait(.1)
 
     def __hardcoded_version_request(self):
-        self.__socket.send(struct.pack(">IIBBB", 11, 0, 0, 1, 1))
-        version_header_data = self.__socket.recv(11)
-        length, _, _, _ = struct.unpack(">IIBH", version_header_data)
-        version_data = self.__socket.recv(length - 11)
+        req_id = self.__request_id_generator.next_id
+        self.__conn.send(req_id, 1, 1)
+        version_data = self.__await_reply(req_id)
         desc_len = 4 + struct.unpack(">I", version_data[0:4])[0]
         minor_version = struct.unpack(
                 ">I", version_data[desc_len + 4: desc_len + 8])[0]
         return minor_version
 
     def __hardcoded_id_sizes_request(self):
-        self.__socket.send(struct.pack(">IIBBB", 11, 0, 0, 1, 7))
-        id_sizes_response_data = self.__socket.recv(31);
-        vm_command_set = self.jdwp_spec.command_sets["VirtualMachine"]
-        id_sizes_command_response = vm_command_set.commands["IDSizes"].response
-        id_sizes_response = id_sizes_command_response.decode(
-                id_sizes_response_data[11 : ])
-        return id_sizes_response
+        req_id = self.__request_id_generator.next_id
+        self.__conn.send(req_id, 1, 7)
+        id_size_data = self.__await_reply(req_id);
+        id_size_names = [
+                "fieldIDSize",
+                "methodIDSize",
+                "objectIDSize",
+                "referenceTypeIDSize",
+                "frameIDSize"]
+        id_sizes = list(struct.unpack(">IIIII", id_size_data))
+        return dict(zip(id_size_names, id_sizes))
+
+    def __await_reply(self, req_id):
+        """Blocks until a reply is received for "req_id"; raises pyjdwp.Error
+        if err != 0, returns reply otherwise"""
+        start_time = time.time()
+        with self.__reply_cv:
+            while req_id not in self.__replies:
+                if time.time() >= start_time + self.__timeout:
+                    raise Timeout("Timed out")
+                self.__reply_cv.wait(.1)
+            err, reply = self.__replies[req_id]
+            del self.__replies[req_id]
+        if err != 0:
+            raise Error("JDWP error: %s" % err)
+        return reply
+
+
+class JdwpConnection(object):
+    def __init__(self, host, port, timeout=10.0, handle_packet=None):
+        self.__host = host
+        self.__port = port
+        self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.__socket.settimeout(1.0)
+        self.__timeout = timeout
+        self.__handle_packet = handle_packet
+        self.__request_lock = threading.Lock()
+        self.__listening_lock = threading.Lock()
+        self.__listening = True
+
+    def initialize(self):
+        # open socket to jvm
+        tries = 100
+        while True:
+            tries -= 1
+            try:
+                self.__socket.connect((self.__host, self.__port))
+                break
+            except socket.error as e:
+                if tries > 0:
+                    continue
+                raise e
+        handshake = b"JDWP-Handshake"
+        self.__socket.send(handshake)
+        data = self.__socket.recv(len(handshake))
+        if data != handshake:
+            self.__socket.close()
+            raise Error("Handshake failed")
+        self.__reader_thread = threading.Thread(
+                target = self.__listen, name = "jdwp_listener")
+        self.__reader_thread.setDaemon(True)
+        self.__reader_thread.start()
+
+    def send(self, req_id, cmd_set_id, cmd_id, payload = None):
+        if payload is None:
+            payload = bytearray()
+        length = 11 + len(payload)
+        header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
+        with self.__request_lock:
+            self.__socket.send(header + payload)
 
     def disconnect(self):
         self.__socket.close();
         with self.__listening_lock:
             self.__listening = False
-        self.__reader_thread.join(5.0)
-
-    def command_request(self, service_name, command_name, data):
-        command = self.jdwp_spec.lookup_command(service_name, command_name)
-        req_bytes = command.encode(data)
-        resp_bytes = self.__send_command_sync(
-                command.command_set_id, command.id, req_bytes)
-        return command.decode(resp_bytes)
+        self.__reader_thread.join(self.__timeout)
 
     def __listen(self):
         while True:
@@ -225,103 +249,32 @@ class JdwpConnection(object):
                 if not self.__listening:
                     return
             try:
-                req_id, flags, err, reply_packed = self.__receive()
+                header = self.__socket.recv(11);
             except socket.error as e:
                 continue
-            if req_id == -1:
-                pass
-            if err == EVENT_MAGIC_NUMBER:
-                self.__handle_event(req_id, reply_packed)
-            else:
-                self.__handle_reply(req_id, err, reply_packed)
-
-    def __handle_event(self, req_id, event_packed):
-        command = self.jdwp_spec.lookup_command("Event", "Composite")
-        self.event_cv.acquire()
-        event = command.decode(event_packed)
-        log.debug(event)
-        if self.__event_cb:
-            self.__event_cb(event)
-        self.events.append((req_id, event))
-        self.event_cv.notify()
-        self.event_cv.release()
-
-    def __handle_reply(self, req_id, err, reply_packed):
-        self.reply_cv.acquire()
-        self.__replies_by_req_id[req_id] = (err, reply_packed)
-        self.reply_cv.notify()
-        self.reply_cv.release()
-
-    def __receive(self):
-        """Reads header, flags, error code, and subsequent data from jdwp socket"""
-        header = self.__socket.recv(11);
-        if len(header) == 0:
-            return -1, 0, 0, ""
-        length, req_id, flags, err = struct.unpack(">IIBH", header)
-        remaining = length - 11
-        msg = bytearray()
-        while remaining > 0:
-            chunk = self.__socket.recv(min(remaining, 4096))
-            msg.extend(chunk)
-            remaining -= len(chunk)
-        reply_packed = "".join([chr(x) for x in msg])
-        return req_id, flags, err, reply_packed
-
-    def __send_command_sync(self, cmd_set_id, cmd_id, request_bytes):
-        """Synchronous wrapper around a call to __send_command_async"""
-        req_id = self.__send_command_async(cmd_set_id, cmd_id, request_bytes)
-        result = self.__get_reply(req_id)
-        with self.reply_cv:
-            del self.__replies_by_req_id[req_id]
-        return result
-
-    def __send_command_async(self, cmd_set_id, cmd_id, request_bytes = None):
-        """Generate req_id and send command to jvm. Returns req_id"""
-        if request_bytes is None:
-            request_bytes = []
-        with self.__request_lock:
-            req_id = self.__generate_req_id()
-            length = 11 + len(request_bytes)
-            header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
-            self.__socket.send(header + request_bytes)
-        return req_id
-
-    def __get_reply(self, req_id):
-        """Blocks until a reply is received for "req_id"; returns err, reply"""
-        start_time = time.time()
-        try:
-            self.reply_cv.acquire()
-            while req_id not in self.__replies_by_req_id:
-                if time.time() - start_time >= self.__timeout:
-                    raise Timeout("Timed out")
-                    log.debug(start_time, time.time())
-                self.reply_cv.wait(2.0)
-            err, reply = self.__replies_by_req_id[req_id]
-        except Timeout as t:
-            log.debug("Re-throwing timeout")
-            raise t
-        finally:
-            self.reply_cv.release()
-
-        if err != 0:
-            raise Error("JDWP error: %s" % err)
-        return reply
-
-    def __generate_req_id(self):
-        result = self.__next_req_id
-        self.__next_req_id += 1
-        return result
-
+            if len(header) != 11:
+                continue
+            length, req_id, flags, err = struct.unpack(">IIBH", header)
+            remaining = length - 11
+            msg = bytearray()
+            while remaining > 0:
+                chunk = self.__socket.recv(min(remaining, 4096))
+                msg.extend(chunk)
+                remaining -= len(chunk)
+            # TODO(cgs): why do we need to do this string voodoo?
+            payload = "".join([chr(x) for x in msg])
+            self.__handle_packet(req_id, flags, err, payload)
+                
 
 class JdwpSpec(object):
-    def __init__(self, version):
+    def __init__(self, version, id_sizes):
         spec_file_name = "specs/jdwp.spec_openjdk_%d" % version
         jdwp_text = pkg_resources.resource_string(__name__, spec_file_name)
         self.__clean_spec_text = re.sub("\s*=\s*", "=", jdwp_text)
         self.__spec = GRAMMAR_JDWP_SPEC.parseString(self.__clean_spec_text)
+        self.id_sizes = id_sizes
         self.command_sets = {}
         self.constant_sets = {}
-        self.id_sizes = {}
         for entry in self.__spec:
             if entry[0] == "ConstantSet":
                 constant_set = ConstantSet(entry)
@@ -804,6 +757,7 @@ class Alt(object):
         accum[self.name] = result
         return data, accum
 
+
 class ErrorRef(object):
   def __init__(self, spec, error):
     self.spec = spec
@@ -821,3 +775,23 @@ SPEC_GRAMMAR_S_EXP_LIST = pyparsing.Group(SPEC_GRAMMAR_OPEN_PAREN +
     pyparsing.ZeroOrMore(SPEC_GRAMMAR_S_EXP) + SPEC_GRAMMAR_CLOSE_PAREN)
 SPEC_GRAMMAR_S_EXP << ( SPEC_GRAMMAR_STRING | SPEC_GRAMMAR_S_EXP_LIST )
 GRAMMAR_JDWP_SPEC = pyparsing.OneOrMore(SPEC_GRAMMAR_S_EXP)
+
+ACCESS_MODIFIER_PUBLIC = 0x0001
+ACCESS_MODIFIER_FINAL = 0x0010
+ACCESS_MODIFIER_SUPER = 0x0020 # old invokespecial instruction semantics (Java 1.0x?)
+ACCESS_MODIFIER_INTERFACE = 0x0200
+ACCESS_MODIFIER_ABSTRACT = 0x0400
+ACCESS_MODIFIER_SYNTHETIC = 0x1000 
+ACCESS_MODIFIER_ANNOTATION = 0x2000
+ACCESS_MODIFIER_ENUM = 0x4000
+ACCESS_MODIFIERS = {
+    0x0001: "public",
+    0x0010: "final",
+    0x0020: "super",
+    0x0200: "interface",
+    0x0400: "abstract",
+    0x1000: "synthetic",
+    0x2000: "annotation",
+    0x4000: "enum"
+}
+

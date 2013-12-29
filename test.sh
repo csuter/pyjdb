@@ -22,11 +22,7 @@ set +e
 
 cd "$dir" # ensure we're back where we started
 
-TEST_ARGS="pyjdwp.pyjdwp_test"
-if [[ -n "$1" ]]; then
-  TEST_ARGS=$@
-fi
-PYTHONPATH="." python -m unittest -v $TEST_ARGS
+PYTHONPATH="." python -m unittest -v pyjdb.pyjdwp_test
 
 ps aux \
   | grep java \

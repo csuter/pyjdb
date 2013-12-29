@@ -118,14 +118,13 @@ class PyjdwpTestBase(unittest.TestCase):
                         "modKind": 5,
                         "classPattern": class_name}]})
         self.jdwp.VirtualMachine.Resume()
-        def matcher(event_raw):
-            req_id, event_data = event_raw
+        def matcher(event_data):
             for event in event_data["events"]:
                 if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
                     if event["ClassPrepare"]["signature"] == signature:
                         return True
             return False
-        _, test_class_prepare_event = self.jdwp.await_event(matcher)
+        test_class_prepare_event = self.jdwp.await_event(matcher)
         return test_class_prepare_event["events"][0]["ClassPrepare"]
 
     def set_breakpoint_in_method(self, class_name, method_name):
@@ -152,12 +151,12 @@ class PyjdwpTestBase(unittest.TestCase):
                         "methodID": method["methodID"],
                         "index": initial_index}]})
         def matcher(event_raw):
-            _, event = event_raw
+            event = event_raw
             for event in event["events"]:
                 if event["eventKind"] == self.jdwp.EventKind.BREAKPOINT:
                     return True
         self.jdwp.VirtualMachine.Resume()
-        _, breakpoint_events = self.jdwp.await_event(matcher)
+        breakpoint_events = self.jdwp.await_event(matcher)
         return breakpoint_events["events"][0]["Breakpoint"]
 
     def set_breakpoint_in_main(self, main_class_name):

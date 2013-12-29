@@ -75,27 +75,9 @@ class PyjdwpTestBase(unittest.TestCase):
         return port
 
     def setUp(self):
-        # boot up the sample java program in target jvm
-        self.devnull = open(subprocess.os.devnull, "r")
-        port = 5005
-        self.test_target_subprocess = subprocess.Popen([
-            "/usr/bin/java", "-cp", TEST_TMP_DIRNAME,
-            "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=%d" % port,
-            self.debug_target_main_class],
-            stdout=self.devnull, stderr=self.devnull)
-        self.jdwp = pyjdwp.Jdwp("localhost", port)
-        try:
-            self.jdwp.initialize()
-        except pyjdwp.Error as e:
-            self.test_target_subprocess.send_signal(signal.SIGKILL)
-            self.test_target_subprocess.wait()
-            self.devnull.close()
-            raise e
-
-    def setUp(self):
         port = self.__pick_port()
-        jvm_args = "-Xrunjdwp:transport=%s" % ",".join([
-                "dt_socket",
+        jvm_args = "-agentlib:jdwp=%s" % ",".join([
+                "transport=dt_socket",
                 "server=y",
                 "suspend=y",
                 "address=%d" % port])

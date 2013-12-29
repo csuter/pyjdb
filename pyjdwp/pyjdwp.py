@@ -61,7 +61,7 @@ class Jdwp(object):
             timeout=10.0):
         self.__timeout = timeout
         self.__jdwp_connection = JdwpConnection(
-                host, jvm_port, timeout)
+                host, jvm_port, timeout, event_cb=event_cb)
 
     def initialize(self):
         self.__jdwp_connection.initialize()
@@ -117,13 +117,14 @@ class GenericConstantSet(object):
             setattr(self, constant_name, constant.value)
 
 class JdwpConnection(object):
-    def __init__(self, host, port, timeout=10.0):
+    def __init__(self, host, port, timeout=10.0, event_cb=None):
         self.__host = host
         self.__port = port
         self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.__next_req_id = 1
         self.__replies_by_req_id = {}
         self.__timeout = timeout
+        self.__event_cb = event_cb
         self.events = []
 
     def initialize(self):
@@ -171,7 +172,12 @@ class JdwpConnection(object):
             raise Error("Handshake failed")
 
     def __await_vm_start(self):
-        vm_start_event_header = self.__socket.recv(11);
+        try:
+            vm_start_event_header = self.__socket.recv(11);
+        except socket.timeout as e:
+            # the vm was probably already started. if something's wrong we'll
+            # find out soon enough.
+            return
         length, _, _, _ = struct.unpack(">IIBH", vm_start_event_header)
         vm_start_event_data = self.__socket.recv(length - 11);
         remainder_fmt = STRUCT_FMTS_BY_SIZE_UNSIGNED[length - 11 - 10]
@@ -233,6 +239,7 @@ class JdwpConnection(object):
         self.event_cv.acquire()
         event = command.decode(event_packed)
         log.debug(event)
+        self.__event_cb(event)
         self.events.append((req_id, event))
         self.event_cv.notify()
         self.event_cv.release()

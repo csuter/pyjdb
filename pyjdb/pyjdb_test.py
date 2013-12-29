@@ -91,7 +91,8 @@ class PyjdbTestBase(unittest.TestCase):
         return port
 
     def setUp(self):
-        port = self.__pick_port()
+        #port = self.__pick_port()
+        port = 5995
         jvm_args = "-agentlib:jdwp=%s" % ",".join([
                 "transport=dt_socket",
                 "server=y",
@@ -124,12 +125,14 @@ class PyjdbTestBase(unittest.TestCase):
         self.devnull.close()
 
     def test_set_breakpoint_at_line(self):
-        self.pyjdb.set_breakpoint_at_line("PyjdbTest.java", 49)
-        self.pyjdb.run_to_breakpoint()
+        from pprint import pprint
+        #self.pyjdb.set_breakpoint_at_line("PyjdbTest.java", 49)
+        pprint(self.pyjdb.threads)
+        self.pyjdb.resume()
+        print("sleeping")
+        time.sleep(5)
+        pprint(self.pyjdb.threads)
 
-    #def test_set_method_breakpoint(self):
-    #    self.pyjdb.set_method_breakpoint("PyjdbTest", "compute")
-    #    self.pyjdb.resume_vm()
 
 if __name__ == "__main__":
     unittest.main()

@@ -125,6 +125,7 @@ class JdwpConnection(object):
         self.__replies_by_req_id = {}
         self.__timeout = timeout
         self.__event_cb = event_cb
+        self.__request_lock = threading.Lock()
         self.events = []
 
     def initialize(self):
@@ -239,7 +240,8 @@ class JdwpConnection(object):
         self.event_cv.acquire()
         event = command.decode(event_packed)
         log.debug(event)
-        self.__event_cb(event)
+        if self.__event_cb:
+            self.__event_cb(event)
         self.events.append((req_id, event))
         self.event_cv.notify()
         self.event_cv.release()
@@ -268,16 +270,20 @@ class JdwpConnection(object):
     def __send_command_sync(self, cmd_set_id, cmd_id, request_bytes):
         """Synchronous wrapper around a call to __send_command_async"""
         req_id = self.__send_command_async(cmd_set_id, cmd_id, request_bytes)
-        return self.__get_reply(req_id)
+        result = self.__get_reply(req_id)
+        with self.reply_cv:
+            del self.__replies_by_req_id[req_id]
+        return result
 
     def __send_command_async(self, cmd_set_id, cmd_id, request_bytes = None):
         """Generate req_id and send command to jvm. Returns req_id"""
         if request_bytes is None:
             request_bytes = []
-        req_id = self.__generate_req_id()
-        length = 11 + len(request_bytes)
-        header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
-        self.__socket.send(header + request_bytes)
+        with self.__request_lock:
+            req_id = self.__generate_req_id()
+            length = 11 + len(request_bytes)
+            header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
+            self.__socket.send(header + request_bytes)
         return req_id
 
     def __get_reply(self, req_id):

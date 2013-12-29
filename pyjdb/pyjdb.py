@@ -10,6 +10,7 @@ class Error(Exception):
 
 
 class Pyjdb(object):
+
     def __init__(self, host="localhost", port=5005, sourcepath="."):
         self.__debug_state_lock = threading.Condition()
         self.jdwp = pyjdwp.Jdwp(host, port, self.handle_event)
@@ -30,10 +31,7 @@ class Pyjdb(object):
         self.__initialize_event_subscriptions()
         self.__initialize_jvm_state()
 
-    def run_to_breakpoint(self):
-        self.resume_vm()
-
-    def resume_vm(self):
+    def resume(self):
         self.jdwp.VirtualMachine.Resume()
 
     def set_deferred_breakpoint_at_line(self, filename, line_number):
@@ -65,7 +63,6 @@ class Pyjdb(object):
                     "eventKind": self.jdwp.EventKind.BREAKPOINT,
                     "suspendPolicy": self.jdwp.SuspendPolicy.ALL,
                     "modifiers": [event_request_modifier]})
-                print(resp)
                 return
         # if we get here we should set the deferred breakpoint
         self.set_deferred_breakpoint_at_line(filename, line_number)
@@ -74,9 +71,18 @@ class Pyjdb(object):
         self.jdwp.disconnect()
 
     def handle_event(self, event_list):
+        print("EVENT: %s", event_list)
         for event in event_list["events"]:
-            if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
+            if event["eventKind"] in [self.jdwp.EventKind.CLASS_PREPARE,
+                    self.jdwp.EventKind.CLASS_UNLOAD]:
                 self.__update_class_metadata(event["ClassPrepare"])
+            elif event["eventKind"] == self.jdwp.EventKind.THREAD_START:
+                self.__update_thread_status(event["ThreadStart"]["thread"])
+            elif event["eventKind"] == self.jdwp.EventKind.THREAD_END:
+                self.__update_thread_status(event["ThreadEnd"]["thread"])
+            elif event["eventKind"] == self.jdwp.EventKind.THREAD_DEATH:
+                self.__update_thread_status(event["ThreadDeath"]["thread"])
+
 
     def __class_name_to_signature(self, class_name):
         return "L%s;" % class_name.replace(".", "/")
@@ -88,6 +94,22 @@ class Pyjdb(object):
             "modifiers": []})
         self.jdwp.EventRequest.Set({
             "eventKind": self.jdwp.EventKind.CLASS_PREPARE,
+            "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
+            "modifiers": []})
+        self.jdwp.EventRequest.Set({
+            "eventKind": self.jdwp.EventKind.THREAD_START,
+            "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
+            "modifiers": []})
+        self.jdwp.EventRequest.Set({
+            "eventKind": self.jdwp.EventKind.THREAD_END,
+            "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
+            "modifiers": []})
+        self.jdwp.EventRequest.Set({
+            "eventKind": self.jdwp.EventKind.THREAD_DEATH,
+            "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
+            "modifiers": []})
+        self.jdwp.EventRequest.Set({
+            "eventKind": self.jdwp.EventKind.EXCEPTION,
             "suspendPolicy": self.jdwp.SuspendPolicy.NONE,
             "modifiers": []})
 

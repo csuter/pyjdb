@@ -14,6 +14,8 @@ class Timeout(Error):
     """Pyjdwp module-level error used specificallly for timeouts"""
     pass
 
+JDWP_PACKET_HEADER_LENGTH = 11
+
 STRUCT_FMTS_BY_SIZE_UNSIGNED = {1: "B", 4: "I", 8: "Q"}
 
 STRUCT_FMT_BY_TYPE_TAG = {
@@ -71,23 +73,35 @@ class RequestIdGenerator(object):
 
 
 class Jdwp(object):
-    def __init__(self, host="localhost", port=5005, timeout=10.0):
+    def __init__(self, host="localhost", port=5005, timeout=10):
         self.__timeout = timeout
         self.__request_id_generator = RequestIdGenerator()
-        self.__replies = {}
-        self.__conn = JdwpConnection(host, port, timeout, self.handle_packet)
+        self.__event_cbs = []
+        self.__conn = JdwpConnection(host, port, self.handle_packet)
         self.__event_cv = threading.Condition()
         self.__reply_cv = threading.Condition()
+        self.__replies = {}
         self.__events = []
+        # background thread for calling self.__event_cbs as new events come in.
+        # we use a separate thread for this so that JdwpConnection's
+        # __reader_thread need not block while we handle events.
+        self.__notifier_thread = threading.Thread(
+                target = self.__event_notify_loop, name = "jdwp_event_notifier")
+        self.__notifier_thread.setDaemon(True)
+        # lock for synchronizing access to self.__notifier_running
+        self.__running_lock = threading.Lock()
+
+    def register_event_callback(self, event_cb):
+        with self.__event_cv:
+            self.__event_cbs.append(event_cb)
+
+    def unregister_event_callback(self, event_cb):
+        with self.__event_cv:
+            self.__event_cbs.remove(event_cb)
 
     def initialize(self):
         # As soon as we call this, events (e.g., vm_start) may be incoming.
         self.__conn.initialize()
-        # TODO(cgs): push this wait() into connection init. connection init
-        # should ensure that it is connected to a valid, started vm. it should
-        # poll vm state (via vm cmd) while simultaneously listening for
-        # vm_start event, and proceed only when one of these shows vm is
-        # running. fail after specified timeout expires.
         self.__await_vm_start()
         version = self.__hardcoded_version_request()
         id_sizes = self.__hardcoded_id_sizes_request()
@@ -98,6 +112,8 @@ class Jdwp(object):
         for constant_set_name in self.jdwp_spec.constant_sets:
             constant_set = self.jdwp_spec.constant_sets[constant_set_name]
             setattr(self, constant_set_name, GenericConstantSet(constant_set))
+        self.__notifier_running = True
+        self.__notifier_thread.start()
 
     def command_request(self, command_set_name, command_name, data):
         command = self.jdwp_spec.lookup_command(command_set_name, command_name)
@@ -125,22 +141,62 @@ class Jdwp(object):
             self.__reply_cv.notify()
 
     def await_event(self, matcher_fn):
-        command = self.jdwp_spec.lookup_command("Event", "Composite")
-        start_time = time.time()
-        found_event = None
-        while found_event is None:
+        cv = threading.Condition()
+        found_events = []
+        def callback(event, found=found_events):
+            with cv:
+                if matcher_fn(event):
+                    found.append(event)
+                    cv.notify()
+        self.register_event_callback(callback)
+        with cv:
+            while not found_events:
+                cv.wait(.1)
+        self.unregister_event_callback(callback)
+        return found_events[0]
+
+    def __event_notify_loop(self):
+        while True:
+            with self.__running_lock:
+                if not self.__notifier_running:
+                    return
             with self.__event_cv:
                 while not self.__events:
-                    if time.time() - start_time > self.__timeout:
-                        raise Timeout("Timed out awaiting event")
                     self.__event_cv.wait(.1)
-                for jvm_req_id, event_payload in self.__events:
-                    event = command.decode(event_payload)
-                    if matcher_fn(event):
-                        found_event = (jvm_req_id, event_payload)
-                        break
-        self.__events.remove(found_event)
-        return event
+                self.__event_notify()
+
+    # this must only ever be called with a lock on self.__event_cv already held.
+    def __event_notify(self):
+        notified = []
+        command = self.jdwp_spec.lookup_command("Event", "Composite")
+        for jvm_req_id, event_payload in self.__events:
+            event = command.decode(event_payload)
+            for event_cb in self.__event_cbs:
+                try:
+                    event_cb(event)
+                except Exception as e:
+                    print("Event notification failed for %s " % event_cb)
+                    print(e)
+                    # TODO(cgs): should we remove event_cb? think about this
+                    continue
+            notified.append((jvm_req_id, event_payload))
+            for entry in notified:
+                self.__events.remove(entry)
+
+    def __await_reply(self, req_id):
+        """Blocks until a reply is received for "req_id"; raises pyjdwp.Error
+        if err != 0, returns reply otherwise"""
+        start_time = time.time()
+        with self.__reply_cv:
+            while req_id not in self.__replies:
+                if time.time() >= start_time + self.__timeout:
+                    raise Timeout("Timed out")
+                self.__reply_cv.wait(.1)
+            err, reply = self.__replies[req_id]
+            del self.__replies[req_id]
+        if err != 0:
+            raise Error("JDWP error: %s" % err)
+        return reply
 
     def __await_vm_start(self):
         found_event = False
@@ -177,34 +233,29 @@ class Jdwp(object):
         id_sizes = list(struct.unpack(">IIIII", id_size_data))
         return dict(zip(id_size_names, id_sizes))
 
-    def __await_reply(self, req_id):
-        """Blocks until a reply is received for "req_id"; raises pyjdwp.Error
-        if err != 0, returns reply otherwise"""
-        start_time = time.time()
-        with self.__reply_cv:
-            while req_id not in self.__replies:
-                if time.time() >= start_time + self.__timeout:
-                    raise Timeout("Timed out")
-                self.__reply_cv.wait(.1)
-            err, reply = self.__replies[req_id]
-            del self.__replies[req_id]
-        if err != 0:
-            raise Error("JDWP error: %s" % err)
-        return reply
-
 
 class JdwpConnection(object):
-    def __init__(self, host, port, timeout=10.0, handle_packet=None):
+    def __init__(self, host, port, packet_callback=None):
+        # the host:port our target jvm is listening on for jdwp connections
         self.__host = host
         self.__port = port
+        # the socket we use to communicate with the jvm (connection is later)
         self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.__socket.settimeout(1.0)
-        self.__timeout = timeout
-        self.__handle_packet = handle_packet
+        # callback for notifying of received jdwp packet (may be an event or
+        # a response to a previous request). this should return quickly, as it
+        # blocks self.__reader_thread
+        self.__packet_callback = packet_callback
+        # lock for synchronizing requests (only one at a time outgoing to jvm)
         self.__request_lock = threading.Lock()
+        # background thread for receiving packets from jvm. runs as long as
+        # self.__listening == True
+        self.__reader_thread = threading.Thread(
+                target = self.__listen, name = "jdwp_listener")
+        self.__reader_thread.setDaemon(True)
+        # lock for synchronizing access to self.__listening
         self.__listening_lock = threading.Lock()
-        self.__listening = True
 
     def initialize(self):
         # open socket to jvm
@@ -216,23 +267,24 @@ class JdwpConnection(object):
                 break
             except socket.error as e:
                 if tries > 0:
+                    time.sleep(.1)
                     continue
                 raise e
+        # jdwp handshake
         handshake = b"JDWP-Handshake"
         self.__socket.send(handshake)
         data = self.__socket.recv(len(handshake))
         if data != handshake:
             self.__socket.close()
             raise Error("Handshake failed")
-        self.__reader_thread = threading.Thread(
-                target = self.__listen, name = "jdwp_listener")
-        self.__reader_thread.setDaemon(True)
+        # start listening for jdwp packets
+        self.__listening = True
         self.__reader_thread.start()
 
-    def send(self, req_id, cmd_set_id, cmd_id, payload = None):
+    def send(self, req_id, cmd_set_id, cmd_id, payload=None):
         if payload is None:
             payload = bytearray()
-        length = 11 + len(payload)
+        length = JDWP_PACKET_HEADER_LENGTH + len(payload)
         header = struct.pack(">IIBBB", length, req_id, 0, cmd_set_id, cmd_id)
         with self.__request_lock:
             self.__socket.send(header + payload)
@@ -241,7 +293,7 @@ class JdwpConnection(object):
         self.__socket.close();
         with self.__listening_lock:
             self.__listening = False
-        self.__reader_thread.join(self.__timeout)
+        self.__reader_thread.join(1.0)
 
     def __listen(self):
         while True:
@@ -249,13 +301,13 @@ class JdwpConnection(object):
                 if not self.__listening:
                     return
             try:
-                header = self.__socket.recv(11);
+                header = self.__socket.recv(JDWP_PACKET_HEADER_LENGTH);
             except socket.error as e:
                 continue
-            if len(header) != 11:
+            if len(header) != JDWP_PACKET_HEADER_LENGTH:
                 continue
             length, req_id, flags, err = struct.unpack(">IIBH", header)
-            remaining = length - 11
+            remaining = length - JDWP_PACKET_HEADER_LENGTH
             msg = bytearray()
             while remaining > 0:
                 chunk = self.__socket.recv(min(remaining, 4096))
@@ -263,7 +315,7 @@ class JdwpConnection(object):
                 remaining -= len(chunk)
             # TODO(cgs): why do we need to do this string voodoo?
             payload = "".join([chr(x) for x in msg])
-            self.__handle_packet(req_id, flags, err, payload)
+            self.__packet_callback(req_id, flags, err, payload)
                 
 
 class JdwpSpec(object):

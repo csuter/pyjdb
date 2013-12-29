@@ -1,6 +1,7 @@
 """Test package for pyjdb, the python java debugger library"""
 import logging 
 import os
+import pprint
 import pyjdb
 import signal
 import socket
@@ -103,9 +104,10 @@ class PyjdbTestBase(unittest.TestCase):
         self.devnull = open(subprocess.os.devnull, "r")
         self.test_target_subprocess = subprocess.Popen(
             ["/usr/bin/java", "-cp", TEST_TMP_DIRNAME, jvm_args,
-                    self.debug_target_main_class],
-            stdout = self.devnull,
-            stderr = self.devnull)
+                    self.debug_target_main_class]#,
+            #stdout = self.devnull,
+            #stderr = self.devnull
+            )
         try:
             self.wait_for_server("localhost", port)
         except socket.error as e:
@@ -125,13 +127,9 @@ class PyjdbTestBase(unittest.TestCase):
         self.devnull.close()
 
     def test_set_breakpoint_at_line(self):
-        from pprint import pprint
         #self.pyjdb.set_breakpoint_at_line("PyjdbTest.java", 49)
-        pprint(self.pyjdb.threads)
         self.pyjdb.resume()
-        print("sleeping")
         time.sleep(5)
-        pprint(self.pyjdb.threads)
 
 
 if __name__ == "__main__":

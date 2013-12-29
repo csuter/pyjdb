@@ -22,7 +22,7 @@ set +e
 
 cd "$dir" # ensure we're back where we started
 
-PYTHONPATH="." python -m unittest -v pyjdb.pyjdwp_test
+PYTHONPATH="." python -m unittest -v pyjdb.pyjdb_test
 
 ps aux \
   | grep java \

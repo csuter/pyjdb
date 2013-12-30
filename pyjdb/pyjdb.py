@@ -60,10 +60,9 @@ class Pyjdb(object):
 
     def set_deferred_breakpoint_at_line(self, filename, line_number):
         index_key = (filename, line_number)
-        print("Setting deferred breakpoint at %s:%d" % index)
+        print("Setting deferred breakpoint at %s:%d" % index_key)
         def matches(cls, filename=filename):
-            if cls["source_file"] != filename:
-                return False
+            return cls["source_file"] == filename
         def notify(cls, filename=filename, line_number=line_number):
             should_set_breakpoint = False
             with self.__debug_state_lock:
@@ -78,7 +77,6 @@ class Pyjdb(object):
 
     def handle_event(self, event_list):
         with self.__debug_state_lock:
-            print("EVENT: %s", event_list)
             for event in event_list["events"]:
                 if event["eventKind"] in [self.jdwp.EventKind.CLASS_PREPARE,
                         self.jdwp.EventKind.CLASS_UNLOAD]:
@@ -192,15 +190,14 @@ class Pyjdb(object):
                     (cls["typeID"], method_id, line_code_index))
 
     def __update_thread_status(self, thread_id):
-        with self.__debug_state_lock:
-            thread = self.threads[thread_id]
-            thread_status = self.jdwp.ThreadReference.Status({
-                "thread": thread_id})
-            thread["status"] = thread_status["threadStatus"]
-            thread["is_suspended"] = thread_status["suspendStatus"]
-            thread["frames"] = []
-            if thread["is_suspended"]:
-                frames = self.jdwp.ThreadReference.Frames({
-                    "thread": thread_id,
-                    "startFrame": 0,
-                    "length": -1})["frames"]
+        thread = self.threads[thread_id]
+        thread_status = self.jdwp.ThreadReference.Status({
+            "thread": thread_id})
+        thread["status"] = thread_status["threadStatus"]
+        thread["is_suspended"] = thread_status["suspendStatus"]
+        thread["frames"] = []
+        if thread["is_suspended"]:
+            frames = self.jdwp.ThreadReference.Frames({
+                "thread": thread_id,
+                "startFrame": 0,
+                "length": -1})["frames"]

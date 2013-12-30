@@ -127,7 +127,7 @@ class PyjdbTestBase(unittest.TestCase):
         self.devnull.close()
 
     def test_set_breakpoint_at_line(self):
-        #self.pyjdb.set_breakpoint_at_line("PyjdbTest.java", 49)
+        self.pyjdb.set_breakpoint_at_line("PyjdbTest.java", 49)
         self.pyjdb.resume()
         time.sleep(5)
 

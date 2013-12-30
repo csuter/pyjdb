@@ -129,6 +129,7 @@ class Jdwp(object):
         self.__conn.disconnect()
 
     def handle_packet(self, req_id, flags, err, payload):
+        #print("PACKET: %d, %d, %d, %d" % (req_id, flags, err, len(payload)))
         if err == 0x4064:
             with self.__event_cv:
                 self.__events.append((req_id, payload))
@@ -180,8 +181,8 @@ class Jdwp(object):
                     # TODO(cgs): should we remove event_cb? think about this
                     continue
             notified.append((jvm_req_id, event_payload))
-            for entry in notified:
-                self.__events.remove(entry)
+        for entry in notified:
+            self.__events.remove(entry)
 
     def __await_reply(self, req_id):
         """Blocks until a reply is received for "req_id"; raises pyjdwp.Error

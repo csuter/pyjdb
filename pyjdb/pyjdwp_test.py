@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import time
 import unittest
+logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
+
 
 TEST_TMP_DIRNAME = tempfile.mkdtemp()
 

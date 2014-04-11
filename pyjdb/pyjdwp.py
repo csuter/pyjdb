@@ -1,3 +1,4 @@
+import logging
 import pkg_resources
 import pyparsing
 import re
@@ -74,6 +75,7 @@ class RequestIdGenerator(object):
 
 class Jdwp(object):
     def __init__(self, host="localhost", port=5005, timeout=10):
+        logging.info("Create jdwp object for %s:%d", host, port)
         self.__timeout = timeout
         self.__request_id_generator = RequestIdGenerator()
         self.__event_cbs = []
@@ -90,16 +92,20 @@ class Jdwp(object):
         self.__notifier_thread.setDaemon(True)
         # lock for synchronizing access to self.__notifier_running
         self.__running_lock = threading.Lock()
+        logging.info("Jdwp object created")
 
     def register_event_callback(self, event_cb):
+        logging.info("Register event callback")
         with self.__event_cv:
             self.__event_cbs.append(event_cb)
 
     def unregister_event_callback(self, event_cb):
+        logging.info("Unregister event callback")
         with self.__event_cv:
             self.__event_cbs.remove(event_cb)
 
     def initialize(self):
+        logging.info("Unregister event callback")
         # As soon as we call this, events (e.g., vm_start) may be incoming.
         self.__conn.initialize()
         self.__await_vm_start()
@@ -259,6 +265,7 @@ class JdwpConnection(object):
         self.__listening_lock = threading.Lock()
 
     def initialize(self):
+        logging.info("Initializing socket connection to jdwp host")
         # open socket to jvm
         tries = 100
         while True:
@@ -270,16 +277,21 @@ class JdwpConnection(object):
                 if tries > 0:
                     time.sleep(.1)
                     continue
+                logging.error("Failed after many retries; this isn't gonna work")
                 raise e
         # jdwp handshake
         handshake = b"JDWP-Handshake"
+        logging.info("Sending handshake")
         self.__socket.send(handshake)
+        logging.info("Awaiting handshake")
         data = self.__socket.recv(len(handshake))
         if data != handshake:
+            logging.error("Handshake failed; got something else.")
             self.__socket.close()
             raise Error("Handshake failed")
         # start listening for jdwp packets
         self.__listening = True
+        logging.info("Starting reader thread")
         self.__reader_thread.start()
 
     def send(self, req_id, cmd_set_id, cmd_id, payload=None):

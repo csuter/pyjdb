@@ -135,7 +135,7 @@ class Jdwp(object):
         self.__conn.disconnect()
 
     def handle_packet(self, req_id, flags, err, payload):
-        #print("PACKET: %d, %d, %d, %d" % (req_id, flags, err, len(payload)))
+        print("PACKET: %d, %d, %d, %d" % (req_id, flags, err, len(payload)))
         if err == 0x4064:
             with self.__event_cv:
                 self.__events.append((req_id, payload))

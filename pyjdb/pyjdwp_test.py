@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import Queue
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 
@@ -119,15 +120,22 @@ class PyjdwpTestBase(unittest.TestCase):
                 "modifiers": [{
                         "modKind": 5,
                         "classPattern": class_name}]})
-        self.jdwp.VirtualMachine.Resume()
         def matcher(event_data):
             for event in event_data["events"]:
                 if event["eventKind"] == self.jdwp.EventKind.CLASS_PREPARE:
                     if event["ClassPrepare"]["signature"] == signature:
                         return True
             return False
-        test_class_prepare_event = self.jdwp.await_event(matcher)
-        return test_class_prepare_event["events"][0]["ClassPrepare"]
+
+        found_events = Queue.Queue()
+        def callback(event, found=found_events):
+            if matcher(event):
+                found.put(event)
+        self.jdwp.register_event_callback(callback)
+        self.jdwp.VirtualMachine.Resume()
+        event = found_events.get()
+        self.jdwp.unregister_event_callback(callback)
+        return event["events"][0]["ClassPrepare"]
 
     def set_breakpoint_in_method(self, class_name, method_name):
         self.resume_and_await_class_load(class_name, self.jdwp.SuspendPolicy.ALL)
@@ -157,9 +165,17 @@ class PyjdwpTestBase(unittest.TestCase):
             for event in event["events"]:
                 if event["eventKind"] == self.jdwp.EventKind.BREAKPOINT:
                     return True
+        found_events = Queue.Queue()
+        def callback(event, found=found_events):
+            if matcher(event):
+                found.put(event)
+        self.jdwp.register_event_callback(callback)
+
         self.jdwp.VirtualMachine.Resume()
-        breakpoint_events = self.jdwp.await_event(matcher)
-        return breakpoint_events["events"][0]["Breakpoint"]
+        event = found_events.get()
+
+        self.jdwp.unregister_event_callback(callback)
+        return event["events"][0]["Breakpoint"]
 
     def set_breakpoint_in_main(self, main_class_name):
         return self.set_breakpoint_in_method(main_class_name, "main")

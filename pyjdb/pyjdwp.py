@@ -1,6 +1,7 @@
 import logging
 import pkg_resources
 import pyparsing
+import Queue
 import re
 import socket
 import struct
@@ -80,29 +81,23 @@ class Jdwp(object):
         self.__request_id_generator = RequestIdGenerator()
         self.__event_cbs = []
         self.__conn = JdwpConnection(host, port, self.handle_packet)
-        self.__event_cv = threading.Condition()
-        self.__reply_cv = threading.Condition()
         self.__replies = {}
-        self.__events = []
+        self.__events = Queue.Queue()
         # background thread for calling self.__event_cbs as new events come in.
         # we use a separate thread for this so that JdwpConnection's
         # __reader_thread need not block while we handle events.
         self.__notifier_thread = threading.Thread(
                 target = self.__event_notify_loop, name = "jdwp_event_notifier")
         self.__notifier_thread.setDaemon(True)
-        # lock for synchronizing access to self.__notifier_running
-        self.__running_lock = threading.Lock()
         logging.info("Jdwp object created")
 
     def register_event_callback(self, event_cb):
         logging.info("Register event callback")
-        with self.__event_cv:
-            self.__event_cbs.append(event_cb)
+        self.__event_cbs.append(event_cb)
 
     def unregister_event_callback(self, event_cb):
         logging.info("Unregister event callback")
-        with self.__event_cv:
-            self.__event_cbs.remove(event_cb)
+        self.__event_cbs.remove(event_cb)
 
     def initialize(self):
         logging.info("Unregister event callback")
@@ -132,91 +127,58 @@ class Jdwp(object):
         return command.decode(reply_payload)
 
     def disconnect(self):
+        self.__notifier_running = False;
         self.__conn.disconnect()
 
     def handle_packet(self, req_id, flags, err, payload):
-        print("PACKET: %d, %d, %d, %d" % (req_id, flags, err, len(payload)))
         if err == 0x4064:
-            with self.__event_cv:
-                self.__events.append((req_id, payload))
-                self.__event_cv.notify()
+            self.__events.put((req_id, payload))
             return
-        with self.__reply_cv:
-            if req_id in self.__replies:
-                raise Error("More than one reply packet for req_id %d" % req_id)
-            self.__replies[req_id] = (err, payload)
-            self.__reply_cv.notify()
-
-    def await_event(self, matcher_fn):
-        cv = threading.Condition()
-        found_events = []
-        def callback(event, found=found_events):
-            with cv:
-                if matcher_fn(event):
-                    found.append(event)
-                    cv.notify()
-        self.register_event_callback(callback)
-        with cv:
-            while not found_events:
-                cv.wait(.1)
-        self.unregister_event_callback(callback)
-        return found_events[0]
+        if req_id in self.__replies:
+            raise Error("More than one reply packet for req_id %d" % req_id)
+        self.__replies[req_id] = (err, payload)
 
     def __event_notify_loop(self):
         while True:
-            with self.__running_lock:
-                if not self.__notifier_running:
-                    return
-            with self.__event_cv:
-                while not self.__events:
-                    self.__event_cv.wait(.1)
+            if not self.__notifier_running:
+                return
+            if not self.__events.empty():
                 self.__event_notify()
 
-    # this must only ever be called with a lock on self.__event_cv already held.
     def __event_notify(self):
-        notified = []
-        command = self.jdwp_spec.lookup_command("Event", "Composite")
-        for jvm_req_id, event_payload in self.__events:
-            event = command.decode(event_payload)
+        while not self.__events.empty():
+            jvm_req_id, event_payload = self.__events.get()
+            event = self.__decode_event(event_payload)
             for event_cb in self.__event_cbs:
-                try:
-                    event_cb(event)
-                except Exception as e:
-                    print("Event notification failed for %s " % event_cb)
-                    print(e)
-                    # TODO(cgs): should we remove event_cb? think about this
-                    continue
-            notified.append((jvm_req_id, event_payload))
-        for entry in notified:
-            self.__events.remove(entry)
+                event_cb(event)
+
+    def __decode_event(self, event_payload):
+        command = self.jdwp_spec.lookup_command("Event", "Composite")
+        return command.decode(event_payload)
 
     def __await_reply(self, req_id):
         """Blocks until a reply is received for "req_id"; raises pyjdwp.Error
         if err != 0, returns reply otherwise"""
         start_time = time.time()
-        with self.__reply_cv:
-            while req_id not in self.__replies:
-                if time.time() >= start_time + self.__timeout:
-                    raise Timeout("Timed out")
-                self.__reply_cv.wait(.1)
-            err, reply = self.__replies[req_id]
-            del self.__replies[req_id]
+        while req_id not in self.__replies:
+            if time.time() >= start_time + self.__timeout:
+                raise Timeout("Timed out")
+        err, reply = self.__replies[req_id]
+        del self.__replies[req_id]
         if err != 0:
             raise Error("JDWP error: %s" % err)
         return reply
 
     def __await_vm_start(self):
         found_event = False
-        with self.__event_cv:
-            while not found_event:
-                for jvm_req_id, payload in self.__events:
-                    if len(payload) < 6:
-                        continue
-                    _, _, event_kind = struct.unpack(">BIB", payload[0 : 6])
-                    if event_kind == 90:  # vm_start
-                        found_event = True
-                        break
-                self.__event_cv.wait(.1)
+        while not found_event:
+            jvm_req_id, payload = self.__events.get()
+            if len(payload) < 6:
+                raise Error("Unexpected event before jvm start: %s" % payload)
+            _, _, event_kind = struct.unpack(">BIB", payload[0 : 6])
+            if event_kind == 90:  # vm_start
+                found_event = True
+                break
 
     def __hardcoded_version_request(self):
         req_id = self.__request_id_generator.next_id
@@ -261,8 +223,6 @@ class JdwpConnection(object):
         self.__reader_thread = threading.Thread(
                 target = self.__listen, name = "jdwp_listener")
         self.__reader_thread.setDaemon(True)
-        # lock for synchronizing access to self.__listening
-        self.__listening_lock = threading.Lock()
 
     def initialize(self):
         logging.info("Initializing socket connection to jdwp host")
@@ -304,15 +264,13 @@ class JdwpConnection(object):
 
     def disconnect(self):
         self.__socket.close();
-        with self.__listening_lock:
-            self.__listening = False
+        self.__listening = False
         self.__reader_thread.join(1.0)
 
     def __listen(self):
         while True:
-            with self.__listening_lock:
-                if not self.__listening:
-                    return
+            if not self.__listening:
+                return
             try:
                 header = self.__socket.recv(JDWP_PACKET_HEADER_LENGTH);
             except socket.error as e:
@@ -329,7 +287,7 @@ class JdwpConnection(object):
             # TODO(cgs): why do we need to do this string voodoo?
             payload = "".join([chr(x) for x in msg])
             self.__packet_callback(req_id, flags, err, payload)
-                
+
 
 class JdwpSpec(object):
     def __init__(self, version, id_sizes):
